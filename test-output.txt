@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head><title>Saskatoon Police Service - Crime Mapping</title>
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="description" content="The Saskatoon Police Service crime mapping application provides approximate locations of reported crimes within Saskatoon." />
+
+    <link rel="apple-touch-icon" href="/images/apple-touch-icon-iphone-60x60.png">
+    <link rel="apple-touch-icon" sizes="60x60" href="/images/apple-touch-icon-ipad-76x76.png">
+    <link rel="apple-touch-icon" sizes="114x114" href="/images/apple-touch-icon-iphone-retina-120x120.png">
+    <link rel="apple-touch-icon" sizes="144x144" href="/images/apple-touch-icon-ipad-retina-152x152.png">
+
+<link rel="stylesheet" type="text/css" href="styles/style.min.css?1710436873" />
+<script>
+function validate(){
+	if(document.getElementById("chkAgree").checked === false){
+		alert("Please check the box to indicate you agree.");
+		return false;
+	}
+}
+</script>
+</head> 
+<body>
+<div id="disclaimer">
+	<div id="disclaimerheader">
+		<img src="/images/spscrest150.gif" alt="Saskatoon Police Service" id="spscrest" />
+		<p>Welcome to the SPS Crime Mapping Application. <br />Please read the following and check the box below to continue:</p>
+	</div>
+	<div id="disclaimertext">
+		<h2 style="text-align: center;">Terms and Conditions of Use</h2>
+		<p>The Saskatoon Police Service crime mapping program provides mapped locations of reported crimes from selected violation types. The locations identified on the map are intended to indicate the general area in which the incident occurred and are not intended to identify the exact incident location. The data is susceptible to a degree of error due to the complexities involved in compiling and programming the data. The data is subject to change for a variety of reasons including late reporting of incidents, reclassification of incidents, errors, and discovery that reported incidents are unfounded. This data can be reviewed and discussed as part of coordinated (crime) prevention initiatives to support and improve community awareness and safety. Members of the community are encouraged to continue partnering and problem solving with the Saskatoon Police Service to support police-community goals and objectives.</p> 
+		<p>The Saskatoon Police Service makes no representations, warranties or guarantees of any kind, express or implied, as to the content, sequence, accuracy, reliability, timeliness or completeness of any of the information and data provided herein. The user of the following pages should not rely on the information or data provided herein for comparison purposes over time, or for any reason. Any reliance the user places on such information or data is therefore strictly at the user's own risk. The Saskatoon Police Service expressly disclaims any representations and warranties, including, without limitation, the implied warranties of merchantability and fitness for a particular purpose.</p>
+		<p>The Saskatoon Police Service does not assume and is not responsible for any liability whatsoever for any errors, omissions, or inaccuracies in the data and information provided, regardless of how caused. Furthermore, in no event will the Saskatoon Police Service be liable for any loss or damage, including without limitation, indirect or consequential loss or damage, or any loss or damage whatsoever arising from loss of data or profits arising out of, or in connection with, the use of these pages. The Saskatoon Police Service will not be responsible for the use of, or the results obtained from the use of this information or data. The Saskatoon Police Service shall assume no liability for any decisions made or actions taken or not taken by the user of the website in reliance upon any information or data furnished hereunder. Any use of the information or data for commercial purposes is strictly prohibited.</p>
+	</div>
+	<div id="disclaimerform" >
+		<form name="frmDisclaimer" id="frmDisclaimer" method="post" action="" onsubmit="return validate()">
+			<label>I have read and agree to the qualifiers <input type="checkbox" id="chkAgree" name="chkAgree" required /></label>
+			<br />
+			<input type="submit"  id="btnAgree" name="btnAgree" value="Continue" />
+		</form>
+	</div>
+	<div id="disclaimerfooter">
+		<hr /><br />&copy;  Saskatoon Police Service, 2026 All Rights Reserved
+	</div>
+</div>
+  
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-7RCSKDV89S"></script>
+  <script>
+	window.dataLayer = window.dataLayer || [];
+	function gtag(){dataLayer.push(arguments);}
+	gtag('js', new Date());
+	gtag('config', 'G-7RCSKDV89S');
+  </script>
+  
+  <script type="text/javascript" src="/_Incapsula_Resource?SWJIYLWA=719d34d31c8e3a6e6fffd425f7e032f3&ns=1&cb=1222224002" async></script></body>
+</html>
+

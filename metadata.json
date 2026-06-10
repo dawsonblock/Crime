@@ -1,0 +1,8 @@
+{
+  "name": "Saskatchewan Safety Map",
+  "description": "A provincial Saskatchewan incident map and crime awareness dashboard showcasing reports categorized from official Saskatoon, Regina, Prince Albert, and Saskatchewan-wide RCMP sources, safety releases, and government announcements.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
