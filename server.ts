@@ -8,6 +8,7 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { EventItem, SeverityType, LocationPrecisionType, SourceType } from "./src/types";
 import { CityAdaptor } from "./CityAdaptor";
+import { calculateThreatScore } from "./src/utils/scoring";
 import fs from "fs";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { 
@@ -1431,6 +1432,7 @@ function deduplicateAndClusterEvents(allEvents: EventItem[]): EventItem[] {
     if (mergedIds.has(primary.id)) continue;
     
     // Find all duplicates / candidates for merging
+    // A target candidate MUST represent the exact same incident reported across multiple sources.
     const clusterCandidates: EventItem[] = [primary];
     
     for (let j = i + 1; j < sorted.length; j++) {
@@ -1438,23 +1440,62 @@ function deduplicateAndClusterEvents(allEvents: EventItem[]): EventItem[] {
       if (mergedIds.has(candidate.id)) continue;
       
       // Calculate proximity rules:
-      // Rule 1: Geographic proximity distance (meters)
       const dist = getDistanceMeters(primary.latitude, primary.longitude, candidate.latitude, candidate.longitude);
-      const isCloseGeographically = dist < 500; // within 500 meters (same block/neighbourhood)
       
-      // Rule 2: Time window (hours)
+      // Tighten geographic rules based on precision to avoid spatial grouping errors
+      // exact: very close (<100m)
+      // block/intersection: close (<200m)
+      // neighbourhood: moderate (<500m) + strict text match
+      // city/unknown: almost never merged unless text is near-identical
+      let maxDistThreshold = 200;
+      if (primary.locationPrecision === "exact" && candidate.locationPrecision === "exact") {
+        maxDistThreshold = 100;
+      } else if (primary.locationPrecision === "neighbourhood" || candidate.locationPrecision === "neighbourhood") {
+        maxDistThreshold = 500;
+      } else if (primary.locationPrecision === "city" || candidate.locationPrecision === "city") {
+        maxDistThreshold = 50; // Only merge if nearly identical location geocodes
+      }
+
+      const isCloseGeographically = dist <= maxDistThreshold;
+      
+      // Tighten time window: 16 hours instead of 24h
       const timeDiffMs = Math.abs(new Date(primary.publishedAt).getTime() - new Date(candidate.publishedAt).getTime());
-      const isWithinTimeWindow = timeDiffMs < 24 * 3600 * 1000; // within 24 hours
+      const isWithinTimeWindow = timeDiffMs < 16 * 3600 * 1000;
       
-      // Rule 3: Related event type or both are public safety
+      // Same publisher protection:
+      // If candidate has the same sourceKey as primary (meaning same feed/organization), they represent separate 
+      // reports within the same region, UNLESS they are absolute identical scraped duplicate entries (sim > 0.85).
+      const shareSameSource = primary.sourceKey === candidate.sourceKey;
+      
+      // Related event types
       const isRelatedType = areRelatedEventTypes(primary.eventType, candidate.eventType);
       
-      // Rule 4: Key word string similarity in title or summary
+      // Semantic string similarity (Jaccard token comparison)
       const sim = calculateStringSimilarity(primary.title + " " + primary.summary, candidate.title + " " + candidate.summary);
-      const isSemanticMatch = sim > 0.18;
       
-      // Same event if Close AND Within Time Window AND (Related Type OR Semantic Similarity Overlaps)
-      const isSameEvent = isCloseGeographically && isWithinTimeWindow && (isRelatedType || isSemanticMatch);
+      // FUSION RULES:
+      // To fuse into a single canonical incident, they must:
+      // 1. Be geographically close & in time window
+      // 3. Have related types and at least solid semantic text confirmation (sim > 0.30) OR representing true different source corroboration (e.g. news mentioning police alert) with strong text match
+      
+      let isSameEvent = false;
+      if (isCloseGeographically && isWithinTimeWindow) {
+        if (shareSameSource) {
+          // If from the same source, they are only duplicate records if text matches near-perfectly
+          if (sim > 0.82) {
+            isSameEvent = true;
+          }
+        } else {
+          // Cross-source intelligence corroboration:
+          // Must have matching related categories AND a reasonable semantic overlapping context
+          if (isRelatedType && (sim > 0.28 || primary.title.split(" ").some(word => word.length > 4 && candidate.title.includes(word)))) {
+            isSameEvent = true;
+          } else if (sim > 0.40) {
+            // Excellent text match (e.g. media article detailing a specific police operation at same block)
+            isSameEvent = true;
+          }
+        }
+      }
       
       if (isSameEvent) {
         clusterCandidates.push(candidate);
@@ -1467,6 +1508,7 @@ function deduplicateAndClusterEvents(allEvents: EventItem[]): EventItem[] {
     if (clusterCandidates.length === 1) {
       primary.sourcesList = [{ name: primary.sourceName, url: primary.originalUrl, key: primary.sourceKey }];
       primary.dedupeHash = primary.sourceHash || ("single-hash-" + primary.id);
+      primary.linkedEvents = []; // Avoid circular [primary] self-reference
       finalizedEvents.push(primary);
     } else {
       // Gather unique sources list
@@ -1489,14 +1531,17 @@ function deduplicateAndClusterEvents(allEvents: EventItem[]): EventItem[] {
         return selectPriority(curr) > selectPriority(best) ? curr : best;
       }, primary);
       
-      // Highest severity level for merged output
-      const severityScores: Record<SeverityType, number> = { critical: 4, high: 3, medium: 2, low: 1 };
-      let highestSeverity: SeverityType = "low";
+      // Blended severity instead of "highest member wins" inflation!
+      // Assign weight values to Candidate severities
+      const severityMap: Record<SeverityType, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+      const reverseSeverityMap: Record<number, SeverityType> = { 4: "critical", 3: "high", 2: "medium", 1: "low" };
+      
+      let sumSeverityWeights = 0;
       clusterCandidates.forEach(c => {
-        if (severityScores[c.severity] > severityScores[highestSeverity]) {
-          highestSeverity = c.severity;
-        }
+        sumSeverityWeights += severityMap[c.severity] || 1;
       });
+      const avgSeverityWeight = Math.round(sumSeverityWeights / clusterCandidates.length);
+      const blendedSeverity = reverseSeverityMap[Math.max(1, Math.min(4, avgSeverityWeight))] || "low";
       
       // Assemble aggregated summary detailing original sources
       let combinedSummary = `**Saskatoon Public Safety Intelligence Fusion [${clusterCandidates.length} linked reports]**:\n`;
@@ -1504,88 +1549,63 @@ function deduplicateAndClusterEvents(allEvents: EventItem[]): EventItem[] {
         combinedSummary += `• **${c.sourceName}**: *${c.title}* – ${c.summary.length > 155 ? c.summary.substring(0, 155) + "..." : c.summary}\n`;
       });
       
-      // Boost confidence
+      // Boost confidence as multiple sources confirm
       const blendedConfidence = Math.min(1.0, Math.round((bestEvent.confidence + 0.05 * (clusterCandidates.length - 1)) * 100) / 100);
       
+      // Clean clone of candidates to strip any potential nested circular structures
+      const cleanCandidates = clusterCandidates.map(c => {
+        const copy = { ...c };
+        delete copy.linkedEvents;
+        return copy;
+      });
+
       const mergedEvent: EventItem = {
         ...bestEvent,
         id: `clust-${bestEvent.id}`,
         title: bestEvent.title.includes("Cluster") ? bestEvent.title : `${bestEvent.title} (Incident Cluster)`,
         summary: combinedSummary,
-        severity: highestSeverity,
+        severity: blendedSeverity, // true blended severity, no inflation!
         confidence: blendedConfidence,
         sourcesList: sourcesList,
         dedupeHash: `fused-${bestEvent.id}-${clusterCandidates.length}`,
+        linkedEvents: cleanCandidates
       };
       
       finalizedEvents.push(mergedEvent);
     }
   }
   
-  return finalizedEvents;
-}
+  // Map intelligence metrics, source tiers, and derived annotations
+  return finalizedEvents.map(evt => {
+    let sourceTier = 3; // Default Tier is 3 (Advisories / Map Layers)
+    let isGenerated = false;
+    let isDerived = false;
 
-// Phase 3: Dynamic Weighted Threat Scoring Algorithm
-function calculateThreatScore(evt: EventItem, userLat?: number, userLng?: number, otherEvents: EventItem[] = []): number {
-  // 1. Base Severity Weight
-  let score = 15;
-  if (evt.severity === "critical") score = 80;
-  else if (evt.severity === "high") score = 60;
-  else if (evt.severity === "medium") score = 35;
-  
-  // 2. Recency Weight
-  const hrsSincePub = Math.max(0, (Date.now() - new Date(evt.publishedAt).getTime()) / 3600000);
-  if (hrsSincePub <= 3) score += 20;
-  else if (hrsSincePub <= 6) score += 15;
-  else if (hrsSincePub <= 12) score += 10;
-  else if (hrsSincePub <= 24) score += 5;
-  
-  // 3. Proximity Bias (dynamic relative to personal/home location)
-  if (userLat !== undefined && userLng !== undefined && !isNaN(userLat) && !isNaN(userLng)) {
-    const dist = getDistanceMeters(evt.latitude, evt.longitude, userLat, userLng);
-    if (dist <= 500) score += 35; // Under 500m (urgently nearby)
-    else if (dist <= 1500) score += 20; // Under 1.5km
-    else if (dist <= 3000) score += 10; // Under 3.0km
-  } else {
-    // defaults baseline regional safety constant
-    score += 5;
-  }
-  
-  // 4. Source Confidence Booster
-  score += Math.round((evt.confidence || 0.8) * 10);
-  
-  // 5. Violent/Offender Risk Multiplier (+25%)
-  const violentTypes = ['shooting', 'stabbing', 'weapons', 'homicide', 'assault', 'robbery', 'dangerous_person_alert'];
-  const isViolent = violentTypes.includes(evt.eventType || '');
-  if (isViolent) {
-    score = score * 1.25;
-  }
-  
-  // 6. Repeat-location cluster weight (incidents within 500m area over last 7 days)
-  const lastWeekCutoff = Date.now() - 7 * 24 * 3600 * 1000;
-  const recentNearby = otherEvents.filter(other => {
-    if (other.id === evt.id) return false;
-    if (new Date(other.publishedAt).getTime() < lastWeekCutoff) return false;
-    const dist = getDistanceMeters(evt.latitude, evt.longitude, other.latitude, other.longitude);
-    return dist <= 500;
+    const key = (evt.sourceKey || "").toLowerCase();
+    const type = (evt.sourceType || "").toLowerCase();
+    const idStr = (evt.id || "").toLowerCase();
+    const title = (evt.title || "").toLowerCase();
+
+    // Determine Source Intelligence Tier
+    if (idStr.startsWith("clust-") || title.includes("(incident cluster)") || title.includes("cluster") || key.includes("ai-")) {
+      sourceTier = 4;
+      isDerived = true;
+      isGenerated = true;
+    } else if (type === "official" && !key.includes("crime_map") && !key.includes("council")) {
+      sourceTier = 1;
+    } else if (type === "media") {
+      sourceTier = 2;
+    } else if (type === "government" || key.includes("crime") || key.includes("map") || key.includes("weather") || key.includes("council")) {
+      sourceTier = 3;
+    }
+
+    return {
+      ...evt,
+      sourceTier,
+      isGenerated: evt.isGenerated || isGenerated,
+      isDerived: evt.isDerived || isDerived,
+    };
   });
-  if (recentNearby.length > 0) {
-    score += Math.min(15, recentNearby.length * 5); // +5 per incident, capped at +15
-  }
-  
-  // 7. Age Decay (slowly decay older alerts after 3 hours)
-  if (hrsSincePub > 3) {
-    const decayPoints = Math.min(30, (hrsSincePub - 3) * 0.8);
-    score -= decayPoints;
-  }
-  
-  // 8. Multiple reports verification bonus
-  if (evt.sourcesList && evt.sourcesList.length > 1) {
-    score += Math.min(15, (evt.sourcesList.length - 1) * 5);
-  }
-  
-  // Clamp perfectly between 1 and 100
-  return Math.max(1, Math.min(100, Math.round(score)));
 }
 
 // ---------------- API ENDPOINTS ----------------

@@ -37,6 +37,12 @@ export interface EventItem {
   sourcesList?: Array<{ name: string; url: string; key: string }>;
   dedupeHash?: string;
   isVerified?: boolean;
+  isGenerated?: boolean;
+  isDerived?: boolean;
+  sourceTier?: number;
+  clusterScore?: number;
+  incidentScore?: number;
+  linkedEvents?: EventItem[];
 }
 
 export interface IngestionResult {

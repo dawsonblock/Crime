@@ -30,6 +30,7 @@ export interface FilterState {
   userLat: number | null;
   userLng: number | null;
   criticalOnly: boolean;
+  sourceTiers: number[];
 }
 
 interface EventFiltersProps {
@@ -101,6 +102,14 @@ export default function EventFilters({
       // Critical Only mode check
       if (filters.criticalOnly && evt.severity !== "critical") {
         return false;
+      }
+
+      // Source Tiers check
+      if (filters.sourceTiers && filters.sourceTiers.length > 0) {
+        const tier = evt.sourceTier || 3;
+        if (!filters.sourceTiers.includes(tier)) {
+          return false;
+        }
       }
 
       // Incident type
@@ -1143,6 +1152,76 @@ export default function EventFilters({
           <p className="text-[8.5px] text-slate-400 font-sans italic leading-normal font-medium px-0.5">
             * Check one or more boxes to isolate specific incident categories. If no boxes are checked, events from all categories are displayed.
           </p>
+        </div>
+
+        {/* Intelligence Source Tiers Checkboxes */}
+        <div id="source-tiers-filter" className="space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-[10px] uppercase font-bold tracking-widest font-mono text-slate-400 flex items-center gap-1.5">
+              <Layers size={11} className="text-indigo-500" /> Intelligence Source Tiers
+            </label>
+            <div className="flex gap-2 text-[9px] font-bold font-mono">
+              <button
+                type="button"
+                onClick={() => onChange({ ...filters, sourceTiers: [1, 2, 3, 4] })}
+                className="text-blue-600 hover:text-blue-800 uppercase cursor-pointer"
+              >
+                [All]
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange({ ...filters, sourceTiers: [] })}
+                className="text-slate-400 hover:text-slate-650 uppercase cursor-pointer"
+              >
+                [None]
+              </button>
+            </div>
+          </div>
+          <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 space-y-2">
+            {[
+              { tier: 1, label: "Tier 1: Official Incidents", desc: "Police, RCMP, SIRT, Live Dispatched Alerts", badge: "🛡️ Official" },
+              { tier: 2, label: "Tier 2: Verified Reporting", desc: "CBC, CTV, Global, Commercial News", badge: "📰 Media" },
+              { tier: 3, label: "Tier 3: Advisories / Map Layers", desc: "Municipal Council, Weather, Crime Map Approx", badge: "⚠️ Advisory" },
+              { tier: 4, label: "Tier 4: Derived Intel / Templates", desc: "AI Summaries, Fused Clusters, Predictions", badge: "🤖 Derived" }
+            ].map(({ tier, label, desc, badge }) => {
+              const isChecked = filters.sourceTiers?.includes(tier) ?? true;
+              const handleTierToggle = () => {
+                const currentTiers = filters.sourceTiers || [1, 2, 3, 4];
+                const updated = currentTiers.includes(tier)
+                  ? currentTiers.filter(t => t !== tier)
+                  : [...currentTiers, tier];
+                onChange({ ...filters, sourceTiers: updated });
+              };
+
+              return (
+                <label
+                  key={tier}
+                  className={`flex flex-col p-2 rounded border text-xs cursor-pointer select-none transition-all duration-150 ${
+                    isChecked
+                      ? "bg-white border-slate-350 shadow-soft"
+                      : "bg-white/40 border-slate-205 text-slate-400 opacity-65 hover:opacity-100"
+                  }`}
+                  id={`tier-card-${tier}`}
+                >
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      value={tier}
+                      id={`tier-input-checkbox-${tier}`}
+                      onChange={handleTierToggle}
+                      className="h-3.5 w-3.5 rounded text-blue-600 border border-slate-300 focus:ring-1 focus:ring-blue-500 cursor-pointer accent-blue-600"
+                    />
+                    <div className="flex-grow flex items-center justify-between font-bold text-slate-700">
+                      <span>{label}</span>
+                      <span className="text-[8.5px] font-mono bg-slate-100 border px-1.5 py-0.2 rounded shrink-0">{badge}</span>
+                    </div>
+                  </div>
+                  <span className="pl-5.5 text-[9.5px] text-slate-450 mt-0.5 leading-snug font-medium">{desc}</span>
+                </label>
+              );
+            })}
+          </div>
         </div>
 
         {/* Publisher Sources list */}

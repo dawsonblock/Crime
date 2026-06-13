@@ -513,6 +513,7 @@ export default function App() {
     userLat: null,
     userLng: null,
     criticalOnly: false,
+    sourceTiers: [1, 2, 3, 4],
   });
 
   // Saskatchewan Regional Cities & Major Hubs configuration
@@ -1164,6 +1165,14 @@ export default function App() {
       // Critical Only mode check
       if (filters.criticalOnly && evt.severity !== "critical") {
         return false;
+      }
+
+      // Source Tiers check
+      if (filters.sourceTiers && filters.sourceTiers.length > 0) {
+        const tier = evt.sourceTier || 3;
+        if (!filters.sourceTiers.includes(tier)) {
+          return false;
+        }
       }
 
       // Severity classification match check
@@ -2143,12 +2152,32 @@ export default function App() {
                                   </span>
                                 )}
                               </div>
-                              <div className="flex gap-2 items-center">
-                                <span className="font-bold text-slate-450 text-[10px] capitalize">
-                                  {evt.locationPrecision}
+                              <div className="flex gap-1.5 items-center select-none shrink-0 text-[8px]">
+                                {/* Location Precision Indicator */}
+                                <span className={`font-mono text-[8.5px] px-1 py-0.5 rounded border font-extrabold capitalize ${
+                                  evt.locationPrecision === "exact" ? "bg-emerald-50 text-emerald-700 border-emerald-150 animate-pulse" : 
+                                  evt.locationPrecision === "block" || evt.locationPrecision === "intersection" ? "bg-blue-50 text-blue-750 border-blue-150" : 
+                                  "bg-slate-50 text-slate-550 border-slate-200"
+                                }`}>
+                                  📍 {evt.locationPrecision}
                                 </span>
+
+                                {/* Source Tier Indicator */}
+                                <span className={`font-mono text-[8.5px] px-1 py-0.5 rounded border font-extrabold ${
+                                  evt.sourceTier === 1 ? "bg-rose-50 text-rose-700 border-rose-200" : 
+                                  evt.sourceTier === 2 ? "bg-indigo-50 text-indigo-700 border-indigo-200" : 
+                                  evt.sourceTier === 3 ? "bg-amber-50 text-amber-700 border-amber-200" : 
+                                  "bg-purple-50 text-purple-700 border-purple-200"
+                                }`}>
+                                  {evt.sourceTier === 1 && "🛡️ T1: Official"}
+                                  {evt.sourceTier === 2 && "📰 T2: News"}
+                                  {evt.sourceTier === 3 && "⚠️ T3: Advisory"}
+                                  {evt.sourceTier === 4 && "🤖 T4: Derived"}
+                                  {!evt.sourceTier && "⚠️ T3: Advisory"}
+                                </span>
+
                                 {bookmarks.includes(evt.id) && (
-                                  <span className="text-amber-600 font-bold">★ SAVED</span>
+                                  <span className="text-amber-605 font-bold font-mono text-[9px] shrink-0">★ SAVED</span>
                                 )}
                               </div>
                             </div>

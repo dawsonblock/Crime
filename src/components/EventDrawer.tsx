@@ -735,6 +735,43 @@ export default function EventDrawer({
           </div>
         </div>
 
+        {/* Advanced Intelligence Score Breakdown */}
+        <div className="bg-indigo-50/15 border border-indigo-100/70 rounded-xl p-4 space-y-3 shadow-sm">
+          <div className="text-[10px] uppercase font-bold tracking-wider font-mono text-indigo-550 flex items-center gap-1.5">
+            <Activity size={12} className="text-indigo-650" />
+            <span>weighted threat score breakdown</span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 text-xs pt-0.5">
+            <div className="bg-white border border-slate-100 p-2.5 rounded-lg space-y-1 shadow-2xs">
+              <span className="text-[9.5px] uppercase font-bold font-mono text-slate-400 block">Incident Score</span>
+              <div className="flex items-baseline gap-1">
+                <span className="text-lg font-extrabold text-slate-800">{selectedEvent.incidentScore || selectedEvent.threatScore || 0}</span>
+                <span className="text-[9px] text-slate-400 font-mono">pts</span>
+              </div>
+              <p className="text-[9.5px] leading-snug text-slate-450 font-medium font-sans">Individual severity weight, completely isolated from surrounding density.</p>
+            </div>
+
+            <div className="bg-white border border-slate-100 p-2.5 rounded-lg space-y-1 shadow-2xs">
+              <span className="text-[9.5px] uppercase font-bold font-mono text-slate-400 block">Cluster Score</span>
+              <div className="flex items-baseline gap-1">
+                <span className="text-lg font-extrabold text-slate-800">
+                  {selectedEvent.id.startsWith("clust-") || selectedEvent.isDerived ? selectedEvent.clusterScore || 0 : "N/A"}
+                </span>
+                {(selectedEvent.id.startsWith("clust-") || selectedEvent.isDerived) && <span className="text-[9px] text-slate-400 font-mono">pts</span>}
+              </div>
+              <p className="text-[9.5px] leading-snug text-slate-450 font-medium font-sans">Blended spatial average of active pattern & corroboration weight.</p>
+            </div>
+          </div>
+
+          <div className="pt-2 border-t border-indigo-100/40 flex items-center justify-between text-[11px] leading-tight select-none">
+            <span className="text-slate-500 font-bold">Integrated Corridor Threat Rating</span>
+            <span className="font-mono font-extrabold text-indigo-650 bg-indigo-50 border border-indigo-150 rounded px-2 py-0.5 text-xs">
+              {selectedEvent.threatScore || 0}% Risk
+            </span>
+          </div>
+        </div>
+
         {/* Dynamic incident content summaries */}
         <div className="space-y-2">
           <div className="text-[10px] uppercase font-bold tracking-wider font-mono text-slate-400 flex items-center gap-1.5">

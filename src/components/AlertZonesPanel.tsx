@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { EventItem, SeverityType, CustomRouteItem } from "../types";
-import { Bell, MapPin, Trash2, Crosshair, ChevronDown, ChevronUp, Shield, AlertTriangle, ShieldCheck, Home, Building2, Hospital, Compass, Route, AlertCircle, Waypoints } from "lucide-react";
+import { Bell, MapPin, Trash2, Crosshair, ChevronDown, ChevronUp, Shield, AlertTriangle, ShieldCheck, Home, Building2, Hospital, Compass, Route, AlertCircle, Waypoints, Clock, Info } from "lucide-react";
 import { calculateRouteRiskScore } from "../utils/routeSafety";
 
 interface CustomPinItem {
@@ -69,6 +69,10 @@ export default function AlertZonesPanel({
 
   // Tab control states: "zones" | "routes"
   const [activeSubTab, setActiveSubTab] = useState<"zones" | "routes">("zones");
+
+  // Route comparison state
+  const [compareRouteIdA, setCompareRouteIdA] = useState<string>("");
+  const [compareRouteIdB, setCompareRouteIdB] = useState<string>("");
 
   const handleDeleteZone = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -466,6 +470,28 @@ export default function AlertZonesPanel({
                             <p className="text-[9.5px] leading-snug font-medium italic opacity-95 text-left">
                               {hintText}
                             </p>
+
+                            <div className="border-t border-slate-300/30 pt-1.5 mt-1 flex items-center justify-between text-[9px] font-mono leading-none select-none">
+                              <span>Live Risk Rating: <b className="font-mono font-black">{liveRiskProfile.score}%</b></span>
+                              <div className="flex items-center gap-1">
+                                <span 
+                                  className="bg-white/40 border border-white/25 text-slate-800 rounded px-1 py-0.5 font-bold flex items-center gap-0.5 cursor-help"
+                                  title="Decay Adjusted: Computed dynamically using an age-based decay weight (48-hour half-life threshold) so older source incidents have substantially less impact on the total route threat rating."
+                                >
+                                  <Clock size={8} className="animate-pulse text-amber-600" />
+                                  <span>Decay Adjusted</span>
+                                </span>
+                                <span
+                                  title="Time-Based Risk Decay: Threat impact of an incident is multiplied by a time-decay weight using a 48-hour half-life. Fresh reports = 100% impact, 48 hours old = 50% impact, 96 hours old = 25% impact. This filters out historical clutter while highlighting live hazards."
+                                  className="shrink-0 flex items-center"
+                                >
+                                  <Info 
+                                    size={10} 
+                                    className="text-slate-500 hover:text-indigo-600 transition-colors cursor-help" 
+                                  />
+                                </span>
+                              </div>
+                            </div>
                           </div>
 
                           {/* Dedicated 'Risk Triggers' section */}
@@ -512,19 +538,38 @@ export default function AlertZonesPanel({
                                         <div className="font-extrabold text-slate-805 line-clamp-2 leading-snug group-hover/item:text-violet-750 transition-colors">
                                           {event.title}
                                         </div>
-                                        <div className="mt-0.5 flex flex-wrap items-center justify-between text-[8.5px] font-mono text-slate-450 leading-none gap-1">
+                                        <div className="mt-1 flex flex-wrap items-center justify-between text-[8.5px] font-mono text-slate-450 leading-none gap-1">
                                           <div className="flex items-center gap-1">
                                             <span className="capitalize">{event.severity} Severity</span>
-                                            {ageWeight !== undefined && (
-                                              <span className="text-violet-600 font-bold bg-violet-50 px-1 py-0.2 border border-violet-100 rounded-[3px] text-[8px]" title="Determined by incident age decay (48h half-life)">
-                                                Weight: {Math.round(ageWeight * 100)}%
-                                              </span>
-                                            )}
                                           </div>
                                           <span className="font-bold text-slate-600 bg-white border border-slate-200/60 px-1 py-0.2 rounded">
                                             {distanceStr} away
                                           </span>
                                         </div>
+                                        {ageWeight !== undefined && (
+                                          <div className="mt-1.5 pt-1.5 border-t border-slate-200/40 flex items-center justify-between gap-2 text-[8px] font-mono text-slate-500">
+                                            <div className="flex items-center gap-1 shrink-0">
+                                              <span className="text-slate-400">Time-Decayed Weight:</span>
+                                              <span className={`font-bold ${
+                                                ageWeight >= 0.7 ? "text-violet-600" : ageWeight >= 0.35 ? "text-indigo-500" : "text-slate-500"
+                                              }`}>
+                                                {Math.round(ageWeight * 100)}%
+                                              </span>
+                                            </div>
+                                            <div className="flex-1 max-w-[80px] h-1 bg-slate-200 rounded-full overflow-hidden" title={`Weight retention: ${Math.round(ageWeight * 100)}% based on age decay`}>
+                                              <div 
+                                                className={`h-full rounded-full transition-all duration-300 ${
+                                                  ageWeight >= 0.7 
+                                                    ? "bg-violet-600" 
+                                                    : ageWeight >= 0.35 
+                                                    ? "bg-indigo-400" 
+                                                    : "bg-slate-350"
+                                                }`} 
+                                                style={{ width: `${Math.round(ageWeight * 100)}%` }} 
+                                              />
+                                            </div>
+                                          </div>
+                                        )}
                                       </div>
                                     </div>
                                   );
@@ -604,6 +649,202 @@ export default function AlertZonesPanel({
                 <span>Draw Corridors Path</span>
               </button>
             )}
+
+            {/* Commute Safety Comparison Engine */}
+            {(() => {
+              if (customRoutes.length === 0) return null;
+
+              const resolvedRouteA = customRoutes.find(r => r.id === compareRouteIdA) || customRoutes[0];
+              const resolvedRouteB = customRoutes.find(r => r.id === compareRouteIdB) || (customRoutes.length > 1 ? (customRoutes[1].id !== resolvedRouteA.id ? customRoutes[1] : customRoutes[0]) : customRoutes[0]);
+
+              const profileA = calculateRouteRiskScore(resolvedRouteA.path, events);
+              const profileB = calculateRouteRiskScore(resolvedRouteB.path, events);
+
+              return (
+                <div className="space-y-2">
+                  {customRoutes.length >= 2 ? (
+                    <div className="mb-4 bg-slate-100/80 border border-slate-200 rounded-xl p-3 space-y-2.5 shadow-sm overflow-hidden text-left" id="routes-comparison-widget">
+                      <div className="flex items-center justify-between border-b border-indigo-50 pb-1.5 select-none">
+                        <div className="flex items-center gap-1.5">
+                          <Route size={13} className="text-indigo-600 animate-pulse" />
+                          <h4 className="text-[11px] font-extrabold text-slate-800 uppercase tracking-widest font-mono">
+                            Commute Comparator
+                          </h4>
+                        </div>
+                        <span className="text-[8px] bg-indigo-50 text-indigo-700 font-extrabold px-1.5 py-0.5 rounded-full border border-indigo-100 uppercase tracking-wider font-mono">
+                          Live Analysis
+                        </span>
+                      </div>
+
+                      <p className="text-[9.5px] text-slate-500 leading-normal mb-1 select-none font-medium">
+                        Toggle two custom travel corridors below to instantly cross-compare their security risks and decay-decayed threat profiles side-by-side.
+                      </p>
+
+                      {/* Dropdown selectors side-by-side */}
+                      <div className="grid grid-cols-2 gap-2.5">
+                        {/* Selector A */}
+                        <div className="space-y-1 text-left">
+                          <label className="text-[8px] uppercase font-bold text-slate-400 font-mono tracking-wider block select-none">Corridor Path A</label>
+                          <select
+                            value={resolvedRouteA.id}
+                            onChange={(e) => setCompareRouteIdA(e.target.value)}
+                            className="w-full text-[10px] font-bold text-slate-700 bg-white border border-slate-200 outline-none p-1.5 rounded-md focus:border-indigo-400 font-sans cursor-pointer shadow-xs min-h-[30px]"
+                          >
+                            {customRoutes.map((r) => (
+                              <option key={r.id} value={r.id}>
+                                {r.title}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {/* Selector B */}
+                        <div className="space-y-1 text-left">
+                          <label className="text-[8px] uppercase font-bold text-slate-400 font-mono tracking-wider block select-none">Corridor Path B</label>
+                          <select
+                            value={resolvedRouteB.id}
+                            onChange={(e) => setCompareRouteIdB(e.target.value)}
+                            className="w-full text-[10px] font-bold text-slate-700 bg-white border border-slate-200 outline-none p-1.5 rounded-md focus:border-indigo-400 font-sans cursor-pointer shadow-xs min-h-[30px]"
+                          >
+                            {customRoutes.map((r) => (
+                              <option key={r.id} value={r.id}>
+                                {r.title}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Side-by-Side Cards */}
+                      <div className="grid grid-cols-2 gap-2.5">
+                        {/* Route A Card */}
+                        <div className={`p-2.5 rounded-lg border flex flex-col justify-between shadow-xs transition-colors cursor-pointer ${
+                          resolvedRouteA.id === selectedRouteId ? "bg-white border-indigo-200 ring-1 ring-indigo-50" : "bg-white/60 border-slate-200"
+                        }`} onClick={() => {
+                          setSelectedRouteId(resolvedRouteA.id);
+                          if (onSelectRoute) onSelectRoute(resolvedRouteA);
+                        }}>
+                          <div className="space-y-1">
+                            <h5 className="text-[10px] font-bold text-slate-705 truncate" title={resolvedRouteA.title}>
+                              {resolvedRouteA.title}
+                            </h5>
+                            <div className="flex items-baseline justify-between select-none">
+                              <span className="text-[14px] font-mono font-black text-slate-800">
+                                {profileA.score}%
+                              </span>
+                              <span className="text-[7.5px] font-bold text-slate-430 uppercase tracking-wider font-mono">
+                                Risk Index
+                              </span>
+                            </div>
+
+                            {/* Progress bar */}
+                            <div className="w-full h-1 bg-slate-200/60 rounded-full overflow-hidden select-none">
+                              <div 
+                                className={`h-full rounded-full transition-all duration-300 ${
+                                  profileA.score >= 40 ? "bg-red-500" : profileA.score >= 15 ? "bg-amber-450" : "bg-emerald-500"
+                                }`}
+                                style={{ width: `${profileA.score}%` }}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="text-[8px] font-mono text-slate-500 space-y-0.5 mt-2 select-none border-t border-slate-150/50 pt-1.5">
+                            <div className="flex justify-between items-center">
+                              <span>Hazards:</span>
+                              <span className="font-bold text-slate-600">{profileA.intersectingEventsCount}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span>Length:</span>
+                              <span className="font-bold text-slate-600">{getRouteLengthStr(resolvedRouteA.path)}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Route B Card */}
+                        <div className={`p-2.5 rounded-lg border flex flex-col justify-between shadow-xs transition-colors cursor-pointer ${
+                          resolvedRouteB.id === selectedRouteId ? "bg-white border-indigo-200 ring-1 ring-indigo-50" : "bg-white/60 border-slate-200"
+                        }`} onClick={() => {
+                          setSelectedRouteId(resolvedRouteB.id);
+                          if (onSelectRoute) onSelectRoute(resolvedRouteB);
+                        }}>
+                          <div className="space-y-1">
+                            <h5 className="text-[10px] font-bold text-slate-705 truncate" title={resolvedRouteB.title}>
+                              {resolvedRouteB.title}
+                            </h5>
+                            <div className="flex items-baseline justify-between select-none">
+                              <span className="text-[14px] font-mono font-black text-slate-800">
+                                {profileB.score}%
+                              </span>
+                              <span className="text-[7.5px] font-bold text-slate-430 uppercase tracking-wider font-mono">
+                                Risk Index
+                              </span>
+                            </div>
+
+                            {/* Progress bar */}
+                            <div className="w-full h-1 bg-slate-200/60 rounded-full overflow-hidden select-none">
+                              <div 
+                                className={`h-full rounded-full transition-all duration-300 ${
+                                  profileB.score >= 40 ? "bg-red-500" : profileB.score >= 15 ? "bg-amber-450" : "bg-emerald-500"
+                                }`}
+                                style={{ width: `${profileB.score}%` }}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="text-[8px] font-mono text-slate-500 space-y-0.5 mt-2 select-none border-t border-slate-150/50 pt-1.5">
+                            <div className="flex justify-between items-center">
+                              <span>Hazards:</span>
+                              <span className="font-bold text-slate-605">{profileB.intersectingEventsCount}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span>Length:</span>
+                              <span className="font-bold text-slate-605">{getRouteLengthStr(resolvedRouteB.path)}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Comparative Recommendation Box */}
+                      <div className="bg-indigo-50/50 border border-indigo-100 rounded-lg p-2.5 text-[10px] text-slate-705 text-left font-medium leading-relaxed shadow-3xs">
+                        {resolvedRouteA.id === resolvedRouteB.id ? (
+                          <div className="flex items-center gap-1.5 text-[9.5px] text-slate-505 leading-tight">
+                            <span>💡 Choose two distinct travel corridors above to review side-by-side threat safety calculations and metrics.</span>
+                          </div>
+                        ) : profileA.score === profileB.score ? (
+                          <div className="flex items-start gap-1.5 text-[9.5px]">
+                            <span className="text-[11.5px] leading-none shrink-0">⚖️</span>
+                            <div>
+                              Both paths present an identical <b>decay-adjusted threat score of {profileA.score}%</b>. We suggest selecting the shorter commute channel (<b>{getRouteLengthStr(resolvedRouteA.path)}</b> vs. <b>{getRouteLengthStr(resolvedRouteB.path)}</b>).
+                            </div>
+                          </div>
+                        ) : profileA.score < profileB.score ? (
+                          <div className="flex items-start gap-1.5 text-[9.5px]">
+                            <div className="bg-emerald-550 text-white font-black rounded-full h-4 w-4 flex items-center justify-center shrink-0 font-mono text-[8.5px]">✓</div>
+                            <div>
+                              <span className="font-bold text-emerald-700">Recommended Commute:</span> Pick <b>{resolvedRouteA.title}</b>.
+                              It exhibits <span className="font-bold text-emerald-600 font-mono">{profileB.score - profileA.score}% lower</span> threat index compared to {resolvedRouteB.title}.
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-start gap-1.5 text-[9.5px]">
+                            <div className="bg-emerald-550 text-white font-black rounded-full h-4 w-4 flex items-center justify-center shrink-0 font-mono text-[8.5px]">✓</div>
+                            <div>
+                              <span className="font-bold text-emerald-700">Recommended Commute:</span> Pick <b>{resolvedRouteB.title}</b>.
+                              It exhibits <span className="font-bold text-emerald-600 font-mono">{profileA.score - profileB.score}% lower</span> threat index compared to {resolvedRouteA.title}.
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mb-3 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-[9.5px] text-slate-500 text-left flex items-start gap-1.5 select-none leading-relaxed">
+                      <span>💡</span>
+                      <span><b>Pro Tip:</b> Create and save another corridor channel to automatically trigger our interactive <b>Commute Safety Comparison Engine</b> with side-by-side decay-adjusted risk calculations.</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* List the saved Corridors routes */}
             {customRoutes.length === 0 ? (
@@ -708,23 +949,43 @@ export default function AlertZonesPanel({
                       <div className="flex items-center gap-1.5 shrink-0 select-none">
                         {/* Interactive Risk Indicator Score Badge */}
                         {isActive ? (
-                          <div
-                            className={`px-1.5 py-1 rounded text-center shrink-0 min-w-[50px] border ${
-                              riskProfile.score >= 40
-                                ? "bg-red-50 text-red-650 border-red-200 animate-pulse font-black"
-                                : "bg-slate-50 text-slate-700 border-slate-220 font-bold"
-                            } text-[10px] leading-tight`}
-                            title="Interactive Risk Score"
-                          >
-                            <span className="block font-mono text-[12px] leading-none mb-0.5 font-extrabold">
-                              {riskProfile.score}%
-                            </span>
-                            <span className="text-[7.5px] uppercase tracking-wider font-extrabold text-slate-400">
-                              RISK
-                            </span>
+                          <div className="flex flex-col items-center gap-1">
+                            <div
+                              className={`px-1.5 py-1 rounded text-center shrink-0 min-w-[55px] border ${
+                                riskProfile.score >= 40
+                                  ? "bg-red-50 text-red-650 border-red-200 animate-pulse font-black"
+                                  : "bg-slate-50 text-slate-700 border-slate-220 font-bold"
+                              } text-[10px] leading-tight`}
+                              title="Interactive Router Risk Score weighted by incident age decay"
+                            >
+                              <span className="block font-mono text-[12px] leading-none mb-0.5 font-extrabold">
+                                {riskProfile.score}%
+                              </span>
+                              <span className="text-[7.5px] uppercase tracking-wider font-extrabold text-slate-400">
+                                RISK
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <span
+                                className="inline-flex items-center gap-0.5 bg-violet-50 text-violet-700 border border-violet-100 rounded px-1 py-0.5 text-[7.5px] font-bold tracking-tight font-mono select-none cursor-help"
+                                title="Decay Adjusted: Calculated dynamically using an age-based decay weight (48-hour half-life threshold) so older source incidents have substantially less impact on the total route threat rating."
+                              >
+                                <Clock size={7} className="text-violet-500 animate-pulse" />
+                                <span>Decay Adj</span>
+                              </span>
+                              <span
+                                title="Time-Based Risk Decay: Threat impact of an incident is multiplied by a time-decay weight using a 48-hour half-life (100% on day 1, 50% on day 2, 25% on day 4). Recent incidents have higher weighting."
+                                className="shrink-0 flex items-center"
+                              >
+                                <Info 
+                                  size={10} 
+                                  className="text-slate-400 hover:text-indigo-600 transition-colors cursor-help" 
+                                />
+                              </span>
+                            </div>
                           </div>
                         ) : (
-                          <div className="px-1.5 py-1 bg-slate-100 border border-slate-205 text-slate-400 rounded text-center shrink-0 min-w-[50px] text-[8.5px] uppercase tracking-wider font-bold select-none">
+                          <div className="px-1.5 py-1 bg-slate-100 border border-slate-205 text-slate-400 rounded text-center shrink-0 min-w-[55px] text-[8.5px] uppercase tracking-wider font-bold select-none">
                             MUTED
                           </div>
                         )}
@@ -820,12 +1081,31 @@ export default function AlertZonesPanel({
                               </h5>
                               <p className="text-[9px] text-slate-455 leading-tight font-medium flex items-center flex-wrap gap-1">
                                 <span>{event.locationText || "Saskatoon"} • {distanceM >= 1000 ? (distanceM / 1000).toFixed(2) + " km" : Math.round(distanceM) + " m"} away</span>
-                                {ageWeight !== undefined && (
-                                  <span className="font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-1 py-0.2 rounded text-[8px]" title="Determined by incident age decay (48h half-life)">
-                                    Weight: {Math.round(ageWeight * 100)}%
-                                  </span>
-                                )}
                               </p>
+                              {ageWeight !== undefined && (
+                                <div className="mt-1 flex items-center justify-between gap-1.5 text-[8px] font-mono text-slate-500">
+                                  <div className="flex items-center gap-0.5 shrink-0">
+                                    <span className="text-slate-400">Time-Decayed Weight:</span>
+                                    <span className={`font-bold ${
+                                      ageWeight >= 0.7 ? "text-indigo-650" : ageWeight >= 0.35 ? "text-indigo-500" : "text-slate-450"
+                                    }`}>
+                                      {Math.round(ageWeight * 100)}%
+                                    </span>
+                                  </div>
+                                  <div className="flex-1 max-w-[70px] h-1 bg-slate-200 rounded-full overflow-hidden" title={`Weight retention: ${Math.round(ageWeight * 100)}% based on age decay`}>
+                                    <div 
+                                      className={`h-full rounded-full transition-all duration-300 ${
+                                        ageWeight >= 0.7 
+                                          ? "bg-indigo-600" 
+                                          : ageWeight >= 0.35 
+                                          ? "bg-indigo-400" 
+                                          : "bg-slate-350"
+                                      }`} 
+                                      style={{ width: `${Math.round(ageWeight * 100)}%` }} 
+                                    />
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           </div>
                         ))}

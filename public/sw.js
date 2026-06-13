@@ -53,7 +53,17 @@ self.addEventListener("activate", (event) => {
 // Handle incoming resource requests (Routing interceptor)
 self.addEventListener("fetch", (event) => {
   const { request } = event;
-  const url = new URL(request.url);
+  let url;
+  try {
+    url = new URL(request.url);
+  } catch (err) {
+    return; // Bypass invalid URLs
+  }
+
+  // Only handle HTTP/HTTPS protocols (skip chrome-extension, data:, about:, etc.)
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return;
+  }
 
   // Skip non-GET requests (e.g. reported bulletins, geofencing reports)
   if (request.method !== "GET") {
@@ -66,10 +76,10 @@ self.addEventListener("fetch", (event) => {
       fetch(request)
         .then((networkResponse) => {
           // If response is valid, write a copy to the local API cache
-          if (networkResponse.ok) {
+          if (networkResponse && networkResponse.ok) {
             const responseClone = networkResponse.clone();
             caches.open(API_CACHE_NAME).then((cache) => {
-              cache.put(request, responseClone);
+              cache.put(request, responseClone).catch(() => {});
             });
           }
           return networkResponse;
@@ -103,7 +113,7 @@ self.addEventListener("fetch", (event) => {
   const isMapTile = 
     url.hostname.includes("tile.openstreetmap.org") || 
     url.hostname.includes("basemaps.cartocdn.com") ||
-    url.pathname.includes(".png") && (url.pathname.includes("/tile/") || url.pathname.includes("/rastertiles/"));
+    (url.pathname.includes(".png") && (url.pathname.includes("/tile/") || url.pathname.includes("/rastertiles/")));
 
   if (isMapTile) {
     event.respondWith(
@@ -112,9 +122,9 @@ self.addEventListener("fetch", (event) => {
           // Return immediately for stellar offline performance!
           // Still fetch in background optionally to refresh tile details occasionally (Stale-While-Revalidate style)
           fetch(request).then((networkResponse) => {
-            if (networkResponse.ok) {
+            if (networkResponse && networkResponse.ok) {
               caches.open(TILE_CACHE_NAME).then((cache) => {
-                cache.put(request, networkResponse);
+                cache.put(request, networkResponse).catch(() => {});
               });
             }
           }).catch(() => {/* Ignore background download failures if offline */});
@@ -124,10 +134,10 @@ self.addEventListener("fetch", (event) => {
 
         // Cache miss: download from tile provider, store, and return
         return fetch(request).then((networkResponse) => {
-          if (networkResponse.ok) {
+          if (networkResponse && networkResponse.ok) {
             const responseClone = networkResponse.clone();
             caches.open(TILE_CACHE_NAME).then((cache) => {
-              cache.put(request, responseClone);
+              cache.put(request, responseClone).catch(() => {});
             });
           }
           return networkResponse;
@@ -141,24 +151,39 @@ self.addEventListener("fetch", (event) => {
   // Returns cached compiled files instantly to enable quick offline load, while checking background upgrades.
   event.respondWith(
     caches.match(request).then((cachedResponse) => {
-      const fetchPromise = fetch(request)
+      if (cachedResponse) {
+        // Stale-While-Revalidate: Return cached, but query updated from network in background
+        fetch(request)
+          .then((networkResponse) => {
+            if (networkResponse && networkResponse.ok) {
+              const responseClone = networkResponse.clone();
+              caches.open(STATIC_CACHE_NAME).then((cache) => {
+                cache.put(request, responseClone).catch(() => {});
+              });
+            }
+          })
+          .catch(() => {});
+        return cachedResponse;
+      }
+
+      // Cache miss: fetch from network and propagate failures naturally (avoiding returning undefined)
+      return fetch(request)
         .then((networkResponse) => {
-          if (networkResponse.ok) {
+          if (networkResponse && networkResponse.ok) {
             const responseClone = networkResponse.clone();
             caches.open(STATIC_CACHE_NAME).then((cache) => {
-              cache.put(request, responseClone);
+              cache.put(request, responseClone).catch(() => {});
             });
           }
           return networkResponse;
         })
-        .catch(() => {
+        .catch((err) => {
           // If offline and request is HTML document navigation, return cached root as a fallback
           if (request.mode === "navigate") {
-            return caches.match("/");
+            return caches.match("/").then((fallback) => fallback || Promise.reject(err));
           }
+          throw err; // Propagate the fetch error so the browser registers a real network failure (not custom undefined crashes)
         });
-
-      return cachedResponse || fetchPromise;
     })
   );
 });
