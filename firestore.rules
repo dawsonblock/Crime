@@ -1,0 +1,135 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Standard Validation Blueprints
+
+    function isValidAlertZone(data) {
+      return data.keys().hasAll(['id', 'name', 'severity', 'userId', 'createdAt'])
+          && data.keys().size() >= 5
+          && data.id is string && data.id.size() <= 128
+          && data.name is string && data.name.size() <= 100
+          && data.severity is string && data.severity.size() <= 20
+          && data.userId is string && data.userId.size() <= 128
+          && data.createdAt is string && data.createdAt.size() <= 50;
+    }
+
+    function isValidCanonicalIncident(data) {
+      return data.keys().hasAll(['id', 'sourceKey', 'title', 'summary', 'originalUrl', 'publishedAt', 'latitude', 'longitude', 'createdAt'])
+          && data.id is string && data.id.size() <= 128
+          && data.sourceKey is string && data.sourceKey.size() <= 128
+          && data.title is string && data.title.size() <= 200
+          && data.summary is string && data.summary.size() <= 1000
+          && data.originalUrl is string && data.originalUrl.size() <= 500
+          && data.publishedAt is string && data.publishedAt.size() <= 50
+          && data.createdAt is string && data.createdAt.size() <= 50
+          && data.latitude is number
+          && data.longitude is number;
+    }
+
+    function isValidSource(data) {
+      return data.keys().hasAll(['key', 'name', 'sourceType', 'baseUrl', 'enabled'])
+          && data.key is string && data.key.size() <= 128
+          && data.name is string && data.name.size() <= 128
+          && data.sourceType is string && data.sourceType.size() <= 50
+          && data.baseUrl is string && data.baseUrl.size() <= 500
+          && data.enabled is bool;
+    }
+
+    function isValidAISummary(data) {
+      return data.keys().hasAll(['id', 'type', 'content', 'generatedAt'])
+          && data.id is string && data.id.size() <= 128
+          && data.type is string && (data.type == 'daily-briefing' || data.type == 'weekly-forecast')
+          && data.content is string && data.content.size() <= 50000
+          && data.generatedAt is string && data.generatedAt.size() <= 50;
+    }
+
+    function isValidRawItem(data) {
+      return data.keys().hasAll(['id', 'sourceKey', 'title', 'originalUrl', 'publishedAt'])
+          && data.id is string && data.id.size() <= 128
+          && data.sourceKey is string && data.sourceKey.size() <= 128
+          && data.title is string && data.title.size() <= 500
+          && data.originalUrl is string && data.originalUrl.size() <= 1000
+          && data.publishedAt is string && data.publishedAt.size() <= 50;
+    }
+
+    function isValidIngestionRun(data) {
+      return data.keys().hasAll(['id', 'runTime', 'addedCount', 'status'])
+          && data.id is string && data.id.size() <= 128
+          && data.runTime is string && data.runTime.size() <= 50
+          && data.addedCount is number
+          && data.status is string && data.status.size() <= 50;
+    }
+
+    function isValidBookmark(data) {
+      return data.keys().hasAll(['id', 'userId', 'eventId', 'createdAt'])
+          && data.id is string && data.id.size() <= 128
+          && data.userId is string && data.userId.size() <= 128
+          && data.eventId is string && data.eventId.size() <= 128
+          && data.note is string && data.note.size() <= 1000
+          && data.createdAt is string && data.createdAt.size() <= 50;
+    }
+
+    // Global Catch-all Safety Net: Deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 1. Sources Collection
+    match /sources/{sourceKey} {
+      allow read, write: if true;
+    }
+
+    // 2. Raw Items Collection
+    match /raw_items/{itemId} {
+      allow read, write: if true;
+    }
+
+    // 3. Canonical Incidents Collection
+    match /canonical_incidents/{incidentId} {
+      allow read, write: if true;
+    }
+
+    // 4. Ingestion Runs Collection
+    match /ingestion_runs/{runId} {
+      allow read, write: if true;
+    }
+
+    // 5. AI Summaries Collection
+    match /ai_summaries/{summaryId} {
+      allow read, write: if true;
+    }
+
+    // 6. Alert Zones Collection
+    match /alert_zones/{zoneId} {
+      allow read, write: if true;
+    }
+
+    // 7. User Bookmarks Collection
+    match /user_bookmarks/{bookmarkId} {
+      allow read, write: if true;
+    }
+  }
+}

@@ -135,7 +135,7 @@ export default function AlertZonesPanel({
           {activeSubTab === "zones" ? (
             <span>Specify custom circles around critical Saskatoon locations. The system automatically scans for real-time police incident occurrences and hazards inside your perimeters.</span>
           ) : (
-            <span>Draw travel corridors across Saskatoon grids. The intelligence engine performs real-time geodesic proximity checks to generate automatic Route Risk Profiles.</span>
+            <span>Draw travel corridors across Saskatoon grids. The intelligence engine integrates geodesic proximity checks, weighted dynamically by incident age, to calculate precise Route Risk Scores.</span>
           )}
         </div>
       </div>
@@ -409,7 +409,7 @@ export default function AlertZonesPanel({
                     📌 <b>Click sequentially on Saskatoon grids</b> directly inside the main tactical map to trace your travel corridors.
                   </p>
                   <p className="text-slate-500 text-[10px] italic">
-                    The spatial engine applies threat proximity aggregation within a 1km safety corridor around all drawn segments.
+                    The spatial engine applies threat proximity aggregation within a 1km safety corridor, automatically weighting risk by incident age (48h half-life) so older alerts have less impact.
                   </p>
                 </div>
                 
@@ -486,7 +486,7 @@ export default function AlertZonesPanel({
                               </div>
                             ) : (
                               <div className="space-y-1.5 max-h-[160px] overflow-y-auto scrollbar-thin scrollbar-thumb-slate-200">
-                                {allIntersectingEvents.map(({ event, distanceM }) => {
+                                {allIntersectingEvents.map(({ event, distanceM, ageWeight }) => {
                                   const pct = Math.round(distanceM);
                                   const distanceStr = pct >= 1000 
                                     ? (pct / 1000).toFixed(2) + " km" 
@@ -513,7 +513,14 @@ export default function AlertZonesPanel({
                                           {event.title}
                                         </div>
                                         <div className="mt-0.5 flex flex-wrap items-center justify-between text-[8.5px] font-mono text-slate-450 leading-none gap-1">
-                                          <span className="capitalize">{event.severity} Severity</span>
+                                          <div className="flex items-center gap-1">
+                                            <span className="capitalize">{event.severity} Severity</span>
+                                            {ageWeight !== undefined && (
+                                              <span className="text-violet-600 font-bold bg-violet-50 px-1 py-0.2 border border-violet-100 rounded-[3px] text-[8px]" title="Determined by incident age decay (48h half-life)">
+                                                Weight: {Math.round(ageWeight * 100)}%
+                                              </span>
+                                            )}
+                                          </div>
                                           <span className="font-bold text-slate-600 bg-white border border-slate-200/60 px-1 py-0.2 rounded">
                                             {distanceStr} away
                                           </span>
@@ -793,7 +800,7 @@ export default function AlertZonesPanel({
                         <div className="p-2 text-[9.5px] text-slate-500 font-semibold bg-indigo-50/20 italic select-none text-left">
                           ⚡ Incidents aggregated in 1km warning buffer around corridors:
                         </div>
-                        {riskProfile.intersectingEvents.map(({ event, distanceM }) => (
+                        {riskProfile.intersectingEvents.map(({ event, distanceM, ageWeight }) => (
                           <div
                             key={event.id}
                             className="p-2 hover:bg-white flex items-start gap-2 text-[10.5px] transition-colors text-left"
@@ -804,15 +811,20 @@ export default function AlertZonesPanel({
                                   ? "bg-red-600 animate-pulse"
                                   : event.severity === "high"
                                   ? "bg-amber-500"
-                                  : "bg-blue-505"
+                                  : "bg-blue-550"
                               }`}
                             />
                             <div className="flex-1 min-w-0">
                               <h5 className="font-bold text-slate-805 truncate">
                                 {event.title}
                               </h5>
-                              <p className="text-[9px] text-slate-455 leading-tight font-medium">
-                                {event.locationText || "Saskatoon"} • {distanceM >= 1000 ? (distanceM / 1000).toFixed(2) + " km" : Math.round(distanceM) + " m"} away
+                              <p className="text-[9px] text-slate-455 leading-tight font-medium flex items-center flex-wrap gap-1">
+                                <span>{event.locationText || "Saskatoon"} • {distanceM >= 1000 ? (distanceM / 1000).toFixed(2) + " km" : Math.round(distanceM) + " m"} away</span>
+                                {ageWeight !== undefined && (
+                                  <span className="font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-1 py-0.2 rounded text-[8px]" title="Determined by incident age decay (48h half-life)">
+                                    Weight: {Math.round(ageWeight * 100)}%
+                                  </span>
+                                )}
                               </p>
                             </div>
                           </div>

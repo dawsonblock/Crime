@@ -97,12 +97,15 @@ export interface RouteRiskCalculation {
   intersectingEvents: Array<{
     event: EventItem;
     distanceM: number;
+    ageWeight: number;
+    weightedImpact: number;
   }>;
 }
 
 /**
  * Inspects all active community public safety incidents and generates a custom risk profile
  * for the user's travel route corridor.
+ * Includes age-based weighting (half-life of 48 hours for incident impact) to decay older alerts.
  */
 export function calculateRouteRiskScore(
   path: Array<[number, number]>,
@@ -118,33 +121,57 @@ export function calculateRouteRiskScore(
   }
 
   let rawScore = 0;
-  const intersectingEvents: Array<{ event: EventItem; distanceM: number }> = [];
+  const intersectingEvents: Array<{
+    event: EventItem;
+    distanceM: number;
+    ageWeight: number;
+    weightedImpact: number;
+  }> = [];
 
   events.forEach((evt) => {
     const dist = getDistanceToPolylineMeters(evt.latitude, evt.longitude, path);
 
     // Filter incidents within an active warning corridor (1000 meters / 1km range)
     if (dist <= 1000) {
-      intersectingEvents.push({ event: evt, distanceM: dist });
-
+      let baseImpact = 0;
       if (dist <= 350) {
         // Direct intersection proximity (high danger weighting)
-        if (evt.severity === "critical") rawScore += 35;
-        else if (evt.severity === "high") rawScore += 22;
-        else if (evt.severity === "medium") rawScore += 10;
-        else rawScore += 3;
+        if (evt.severity === "critical") baseImpact = 35;
+        else if (evt.severity === "high") baseImpact = 22;
+        else if (evt.severity === "medium") baseImpact = 10;
+        else baseImpact = 3;
       } else {
         // Perimeter buffer proximity (moderate advisory weighting)
-        if (evt.severity === "critical") rawScore += 15;
-        else if (evt.severity === "high") rawScore += 8;
-        else if (evt.severity === "medium") rawScore += 4;
-        else rawScore += 1;
+        if (evt.severity === "critical") baseImpact = 15;
+        else if (evt.severity === "high") baseImpact = 8;
+        else if (evt.severity === "medium") baseImpact = 4;
+        else baseImpact = 1;
       }
+
+      // Calculate age-based decay weighting using a standard 48-hour half-life model
+      const dateStr = evt.publishedAt || evt.createdAt;
+      const publishedDate = dateStr ? new Date(dateStr) : new Date();
+      const ageMs = Math.max(0, Date.now() - publishedDate.getTime());
+      const ageHours = ageMs / (1000 * 60 * 60);
+
+      // Half-life equation: 1.0 at 0 hours, 0.5 at 48 hours, 0.25 at 96 hours, etc.
+      // Clamp between 0.01 and 1.0 to retain a small nominal weight for historical alerts.
+      const ageWeight = Math.min(1.0, Math.max(0.01, Math.pow(0.5, ageHours / 48)));
+      const weightedImpact = baseImpact * ageWeight;
+
+      rawScore += weightedImpact;
+
+      intersectingEvents.push({
+        event: evt,
+        distanceM: dist,
+        ageWeight,
+        weightedImpact
+      });
     }
   });
 
   // Clamp Route Risk Score directly between 0 and 100
-  const score = Math.max(0, Math.min(100, rawScore));
+  const score = Math.max(0, Math.min(100, Math.round(rawScore)));
 
   // Categorize risk scale
   let riskLevel: "low" | "medium" | "high" | "critical" = "low";

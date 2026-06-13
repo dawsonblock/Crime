@@ -36,6 +36,7 @@ export interface EventItem {
   threatScore?: number;
   sourcesList?: Array<{ name: string; url: string; key: string }>;
   dedupeHash?: string;
+  isVerified?: boolean;
 }
 
 export interface IngestionResult {

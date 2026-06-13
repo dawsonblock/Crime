@@ -8,8 +8,73 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { EventItem, SeverityType, LocationPrecisionType, SourceType } from "./src/types";
 import { CityAdaptor } from "./CityAdaptor";
+import fs from "fs";
+import { initializeApp, getApps, getApp } from "firebase/app";
+import { 
+  getFirestore, doc, setDoc, getDoc, getDocs, collection, query, where, deleteDoc, writeBatch, limit, orderBy
+} from "firebase/firestore";
 
 dotenv.config();
+
+const DEMO_MODE = process.env.DEMO_MODE === "true";
+
+// Read Firebase applet configuration securely from local volume JSON and initialize Firebase Client SDK
+let db: any = null;
+try {
+  const firebaseConfigPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(firebaseConfigPath)) {
+    const config = JSON.parse(fs.readFileSync(firebaseConfigPath, "utf8"));
+    const firebaseApp = getApps().length === 0 ? initializeApp(config) : getApp();
+    db = getFirestore(firebaseApp, config.firestoreDatabaseId);
+    console.log("[Firebase] Successfully initialized with Database ID:", config.firestoreDatabaseId);
+  } else {
+    console.warn("[Firebase] Warning: firebase-applet-config.json not found. Database operations will run in-memory fallback.");
+  }
+} catch (err) {
+  console.error("[Firebase Error] Configuration/Initialization failed:", err);
+}
+
+// Security error tracking metrics in accordance with Firestore security rule specifications
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, colPath: string | null) {
+  const errInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: null,
+      email: null,
+    },
+    operationType,
+    path: colPath
+  };
+  console.error('Firestore Error IncidentLogged:', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+function sanitizeFirestoreData(data: any): any {
+  if (data === null || data === undefined) return null;
+  if (Array.isArray(data)) {
+    return data.map(item => sanitizeFirestoreData(item)).filter(v => v !== undefined);
+  }
+  if (typeof data === "object") {
+    const cleaned: any = {};
+    for (const key of Object.keys(data)) {
+      if (data[key] !== undefined) {
+        cleaned[key] = sanitizeFirestoreData(data[key]);
+      }
+    }
+    return cleaned;
+  }
+  return data;
+}
+
 
 // Helper to fetch content bypassing SSL/TLS certificate chain verification errors
 function fetchWithSslBypass(urlStr: string, headers: Record<string, string> = {}): Promise<string> {
@@ -672,10 +737,130 @@ function getEventImagesByType(eventType: string): string[] {
   ];
 }
 
-let events: EventItem[] = initialSeeds.map(e => ({
-  ...e,
-  imageUrls: e.imageUrls || getEventImagesByType(e.eventType)
-}));
+let events: EventItem[] = [];
+
+// Enforce Phase 1 Critical Rules on any incident:
+function isIncidentCompliant(e: any): boolean {
+  // No source URL = no incident
+  if (!e.originalUrl || e.originalUrl.trim() === "") return false;
+  // No timestamp = no incident  
+  if (!e.publishedAt || e.publishedAt.trim() === "") return false;
+  // No location = no map pin
+  if (e.latitude === undefined || e.latitude === null || isNaN(e.latitude) ||
+      e.longitude === undefined || e.longitude === null || isNaN(e.longitude)) return false;
+  return true;
+}
+
+// Seed Firestore initially with our verified, compliant seeds if empty
+async function seedFirestoreIfNeeded() {
+  if (!db) {
+    events = initialSeeds.filter(isIncidentCompliant).map(e => ({
+      ...e,
+      isVerified: configSources.some(s => s.key === e.sourceKey),
+      imageUrls: e.imageUrls || getEventImagesByType(e.eventType),
+      createdAt: e.createdAt || new Date().toISOString()
+    }));
+    return;
+  }
+  try {
+    const colRef = collection(db, "canonical_incidents");
+    const snapshot = await getDocs(query(colRef, limit(1)));
+    if (snapshot.empty) {
+      console.log("[Firebase Seed] Firestore 'canonical_incidents' has zero documents. Migrating compliant seed incidents...");
+      const verifiedSeeds = initialSeeds.filter(isIncidentCompliant);
+      
+      for (const item of verifiedSeeds) {
+        const isVerified = configSources.some(s => s.key === item.sourceKey);
+        const enriched = {
+          ...item,
+          isVerified,
+          imageUrls: item.imageUrls || getEventImagesByType(item.eventType),
+          createdAt: item.createdAt || new Date().toISOString()
+        };
+        await setDoc(doc(db, "canonical_incidents", item.id), sanitizeFirestoreData(enriched));
+      }
+      console.log(`[Firebase Seed] Loaded ${verifiedSeeds.length} compliant seeds successfully.`);
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, "canonical_incidents");
+  }
+}
+
+// Synchronizes database with the local memory cache, strictly validating each item
+async function syncEventsFromFirestore() {
+  if (!db) {
+    console.log("[Firebase Sync] Firebase not active. Proceeding with in-memory verified seeds.");
+    events = initialSeeds.filter(isIncidentCompliant).map(e => ({
+      ...e,
+      isVerified: configSources.some(s => s.key === e.sourceKey),
+      imageUrls: e.imageUrls || getEventImagesByType(e.eventType),
+      createdAt: e.createdAt || new Date().toISOString()
+    }));
+    return;
+  }
+  try {
+    await seedFirestoreIfNeeded();
+    const colRef = collection(db, "canonical_incidents");
+    const q = query(colRef);
+    const snapshot = await getDocs(q);
+    const loaded: EventItem[] = [];
+    snapshot.forEach((d) => {
+      loaded.push(d.data() as EventItem);
+    });
+
+    const compliantList = loaded.filter(isIncidentCompliant);
+    compliantList.sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
+    events = compliantList;
+    console.log(`[Firebase Sync] Ready. Loaded ${events.length} fully verified incidents from Firestore.`);
+  } catch (err) {
+    console.error("[Firebase Sync Error] syncEventsFromFirestore failed. Loading in-memory fallback:", err);
+    events = initialSeeds.filter(isIncidentCompliant).map(e => ({
+      ...e,
+      isVerified: configSources.some(s => s.key === e.sourceKey),
+      imageUrls: e.imageUrls || getEventImagesByType(e.eventType),
+      createdAt: e.createdAt || new Date().toISOString()
+    }));
+  }
+}
+
+// Persists a verified, compliant incident to Firestore canonical_incidents and registers its unmodified form in raw_items
+async function saveIncident(evt: EventItem) {
+  // First, prepend to in-memory Cache
+  if (!events.some(e => e.id === evt.id)) {
+    events.unshift(evt);
+  }
+  
+  if (db) {
+    try {
+      const resolvedSourceKey = evt.sourceKey || "saskatoon_police_news";
+      const isVerified = evt.isVerified !== undefined ? evt.isVerified : configSources.some(s => s.key === resolvedSourceKey);
+      const docData = {
+        ...evt,
+        sourceKey: resolvedSourceKey,
+        isVerified,
+        createdAt: evt.createdAt || new Date().toISOString()
+      };
+      await setDoc(doc(db, "canonical_incidents", evt.id), sanitizeFirestoreData(docData));
+
+      // Write unmodified representation to raw_items ("Never overwrite raw source data")
+      const rawId = `raw-${evt.id}`;
+      const rawRecord = {
+        id: rawId,
+        sourceKey: resolvedSourceKey,
+        title: evt.title,
+        summary: evt.summary,
+        originalUrl: evt.originalUrl,
+        publishedAt: evt.publishedAt,
+        retrievedAt: evt.retrievedAt || new Date().toISOString()
+      };
+      await setDoc(doc(db, "raw_items", rawId), sanitizeFirestoreData(rawRecord));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, "canonical_incidents");
+    }
+  }
+}
+
+
 
 // Available personal Crime/Safety news config sources
 const configSources = [
@@ -1405,13 +1590,171 @@ function calculateThreatScore(evt: EventItem, userLat?: number, userLng?: number
 
 // ---------------- API ENDPOINTS ----------------
 
+// GET /api/alert-zones
+app.get("/api/alert-zones", async (req, res) => {
+  try {
+    if (!db) {
+      res.json([]);
+      return;
+    }
+    const colRef = collection(db, "alert_zones");
+    const snapshot = await getDocs(colRef);
+    const zones: any[] = [];
+    snapshot.forEach(d => zones.push(d.data()));
+    res.json(zones);
+  } catch (err) {
+    try {
+      handleFirestoreError(err, OperationType.LIST, "alert_zones");
+    } catch (loggedErr: any) {
+      res.status(500).json({ error: "Failed to load alert zones", details: loggedErr.message });
+    }
+  }
+});
+
+// POST /api/alert-zones/sync
+app.post("/api/alert-zones/sync", async (req, res) => {
+  try {
+    const list = req.body;
+    if (!Array.isArray(list)) {
+      res.status(400).json({ error: "Invalid alert zones array layout" });
+      return;
+    }
+    if (!db) {
+      res.json({ success: true, message: "Firebase not configured, running in-memory bypass" });
+      return;
+    }
+    const colRef = collection(db, "alert_zones");
+    const snapshot = await getDocs(colRef);
+    const existingIds = new Set<string>();
+    snapshot.forEach(d => existingIds.add(d.id));
+
+    const incomingIds = new Set(list.map(p => p.id));
+
+    // Delete removed ones
+    for (const oldId of existingIds) {
+      if (!incomingIds.has(oldId)) {
+        await deleteDoc(doc(db, "alert_zones", oldId));
+      }
+    }
+
+    // Save/update list
+    for (const pin of list) {
+      const validatedZone = {
+        id: pin.id,
+        name: pin.title || pin.name,
+        severity: pin.severity,
+        radius: pin.radius || 150,
+        coordinates: [pin.latitude, pin.longitude],
+        userId: pin.userId || "anonymous_coordinator",
+        createdAt: pin.createdAt || new Date().toISOString()
+      };
+      await setDoc(doc(db, "alert_zones", pin.id), sanitizeFirestoreData(validatedZone));
+    }
+    res.json({ success: true });
+  } catch (err) {
+    try {
+      handleFirestoreError(err, OperationType.WRITE, "alert_zones");
+    } catch (loggedErr: any) {
+      res.status(500).json({ error: "Failed to synchronize alert zones with database", details: loggedErr.message });
+    }
+  }
+});
+
+// GET /api/bookmarks
+app.get("/api/bookmarks", async (req, res) => {
+  try {
+    if (!db) {
+      res.json([]);
+      return;
+    }
+    const userId = req.query.userId as string;
+    const colRef = collection(db, "user_bookmarks");
+    let snapshot;
+    if (userId) {
+      const q = query(colRef, where("userId", "==", userId));
+      snapshot = await getDocs(q);
+    } else {
+      snapshot = await getDocs(colRef);
+    }
+    const bookmarks: any[] = [];
+    snapshot.forEach(d => bookmarks.push(d.data()));
+    res.json(bookmarks);
+  } catch (err) {
+    try {
+      handleFirestoreError(err, OperationType.LIST, "user_bookmarks");
+    } catch (loggedErr: any) {
+      res.status(500).json({ error: "Failed to load bookmarks", details: loggedErr.message });
+    }
+  }
+});
+
+// POST /api/bookmarks/sync
+app.post("/api/bookmarks/sync", async (req, res) => {
+  try {
+    const { userId, list } = req.body;
+    if (!userId) {
+      res.status(400).json({ error: "User ID is required to synchronize bookmarked feeds." });
+      return;
+    }
+    if (!Array.isArray(list)) {
+      res.status(400).json({ error: "Invalid bookmarks array layout" });
+      return;
+    }
+    if (!db) {
+      res.json({ success: true, message: "Firebase not configured, running in-memory bypass" });
+      return;
+    }
+    
+    const colRef = collection(db, "user_bookmarks");
+    const q = query(colRef, where("userId", "==", userId));
+    const snapshot = await getDocs(q);
+    const existingIds = new Set<string>();
+    snapshot.forEach(d => existingIds.add(d.id));
+
+    const incomingIds = new Set(list.map((b: any) => b.id));
+
+    // Delete removed ones
+    for (const oldId of existingIds) {
+      if (!incomingIds.has(oldId)) {
+        await deleteDoc(doc(db, "user_bookmarks", oldId));
+      }
+    }
+
+    // Save/update list
+    for (const b of list) {
+      const validatedBookmark = {
+        id: b.id,
+        userId: userId,
+        eventId: b.eventId,
+        note: b.note || "",
+        createdAt: b.createdAt || new Date().toISOString()
+      };
+      await setDoc(doc(db, "user_bookmarks", b.id), sanitizeFirestoreData(validatedBookmark));
+    }
+    res.json({ success: true });
+  } catch (err) {
+    try {
+      handleFirestoreError(err, OperationType.WRITE, "user_bookmarks");
+    } catch (loggedErr: any) {
+      res.status(500).json({ error: "Failed to synchronize bookmarks with database", details: loggedErr.message });
+    }
+  }
+});
+
 // GET /api/sources
 app.get("/api/sources", (req, res) => {
   res.json(configSources);
 });
 
 // GET /api/events
-app.get("/api/events", (req, res) => {
+app.get("/api/events", async (req, res) => {
+  try {
+    // Synchronize latest records from Firestore on each request
+    await syncEventsFromFirestore();
+  } catch (err) {
+    console.error("[Events API] Failed to trigger live Firestore reload. Serving current cache:", err);
+  }
+
   // 1. Run server-side deduplication and clustering over raw events
   const processed = deduplicateAndClusterEvents(events);
 
@@ -1852,7 +2195,7 @@ app.post("/api/events/report-manual", async (req, res) => {
         sourceType: "media",
         title: manualTitle,
         summary: manualSummary,
-        originalUrl: originalUrl || "https://saskatoonpolice.ca/news/manual",
+        originalUrl: originalUrl || `https://saskatoonsafetymap.ca/manual-reports/${customId}`,
         publishedAt: new Date().toISOString(),
         retrievedAt: new Date().toISOString(),
         eventType: ruleClass.eventType,
@@ -1865,10 +2208,11 @@ app.post("/api/events/report-manual", async (req, res) => {
         locationConfidence: geocoded.locationConfidence,
         sourceHash: "manual-hash-" + Math.random(),
         createdAt: new Date().toISOString(),
-        imageUrls: getEventImagesByType(ruleClass.eventType)
+        imageUrls: getEventImagesByType(ruleClass.eventType),
+        isVerified: false // manual/unverified-only!
       };
 
-      events.unshift(resolvedObj);
+      await saveIncident(resolvedObj);
       res.json({
         success: true,
         count: 1,
@@ -1927,7 +2271,7 @@ Generate an objective, highly informative 2-sentence summary.`;
       sourceType: "media",
       title: result.title || manualTitle,
       summary: result.summary || manualSummary,
-      originalUrl: originalUrl || "https://saskatoonpolice.ca/news/manual-report",
+      originalUrl: originalUrl || `https://saskatoonsafetymap.ca/manual-reports/${customId}`,
       publishedAt: new Date().toISOString(),
       retrievedAt: new Date().toISOString(),
       eventType: validatedClass.eventType || result.eventType || "other_public_safety",
@@ -1940,10 +2284,11 @@ Generate an objective, highly informative 2-sentence summary.`;
       locationConfidence: geocoded.locationConfidence,
       sourceHash: "interactive-hash-" + Math.random(),
       createdAt: new Date().toISOString(),
-      imageUrls: getEventImagesByType(validatedClass.eventType || result.eventType || "other_public_safety")
+      imageUrls: getEventImagesByType(validatedClass.eventType || result.eventType || "other_public_safety"),
+      isVerified: false // manual/unverified-only!
     };
 
-    events.unshift(manualEvent);
+    await saveIncident(manualEvent);
     res.json({ success: true, count: 1, addedEvents: [manualEvent], message: "Success dynamically analyzing and geocoding your manual safety report!" });
   } catch (error: any) {
     console.error("AI manual report processing failed:", error);
@@ -2124,13 +2469,13 @@ Return a valid JSON array matching this schema. Even if there is only 1 event, r
 });
 
 // POST /api/ingest/run
-// Runs a simulated or real-link ingestion cycle parsing recent RSS titles through Gemini to discover, parse, geocode, and push 3 new events!
+// Runs a live Saskatoon safety intelligence and source crawler cycle, geocoding & persisting records strictly.
 app.post("/api/ingest/run", async (req, res) => {
   try {
-    const isApiKeyConfigured = !!process.env.GEMINI_API_KEY;
     const addedList: EventItem[] = [];
+    const isApiKeyConfigured = !!process.env.GEMINI_API_KEY;
 
-    // Always fetch live data first
+    // 1. Fetch live data from all real municipal and provincial news + map crawlers
     const [newLiveData, newNewsData, reginaNewsData, rcmpData, extraMuniData, pythonEvents] = await Promise.all([
       fetchSaskatoonLiveCrimeData().catch(() => []),
       fetchSaskatoonNewsFeeds().catch(() => []),
@@ -2142,12 +2487,15 @@ app.post("/api/ingest/run", async (req, res) => {
 
     const combinedCrawl = [...newLiveData, ...newNewsData, ...reginaNewsData, ...rcmpData, ...extraMuniData, ...pythonEvents];
     for (const evt of combinedCrawl) {
-      if (!events.find(e => e.id === evt.id)) {
-        addedList.push(evt);
+      if (!events.some(e => e.id === evt.id || e.sourceHash === evt.sourceHash)) {
+        if (isIncidentCompliant(evt)) {
+          await saveIncident(evt);
+          addedList.push(evt);
+        }
       }
     }
 
-    // Dynamic localized ingestion logic using CityAdaptor for each pre-configured city
+    // 2. Dynamic CityAdaptor cycle for real-time intelligence feeds across Saskatchewan
     const targetCityParam = req.body?.city || req.query?.city || "All";
     let targetCities: string[] = [];
     if (targetCityParam === "All" || targetCityParam === "Saskatchewan (All)") {
@@ -2163,169 +2511,167 @@ app.post("/api/ingest/run", async (req, res) => {
     const adapterEvents = await CityAdaptor.runCityCycle(targetCities, adapterContext);
 
     for (const evt of adapterEvents) {
-      if (!events.find(e => e.id === evt.id) && !addedList.find(e => e.id === evt.id)) {
-        addedList.push(evt);
-      }
-    }
-
-    if (!isApiKeyConfigured) {
-      // Simulate adding 3 beautiful fresh events block-by-block if API key is not configured yet
-      const rawSeeds = [
-        {
-          id: "evt-sim-101",
-          sourceKey: "saskatoon_police_news",
-          sourceName: "Saskatoon Police News",
-          sourceType: "official" as SourceType,
-          title: "Active Stabbing Incident Inquiry on 8th Street East",
-          summary: "Officers cordoned off a gas station entrance following a broad-daylight stabbing event. One victim transported in stable condition. Search continues for matching suspect vest description.",
-          originalUrl: "https://saskatoonpolice.ca/news/simulated-stabbing-8th",
-          publishedAt: new Date().toISOString(),
-          locationText: "860 8th Street East, Saskatoon, SK" // Exact address to test our masking precision and rounding!
-        },
-        {
-          id: "evt-sim-102",
-          sourceKey: "rcmp_saskatchewan_news",
-          sourceName: "Saskatchewan RCMP News",
-          sourceType: "official" as SourceType,
-          title: "Saskatchewan Dangerous Driver Alert Near Warman Corridor",
-          summary: "RCMP dispatched units targeting reports of an erratically maneuvering truck transport heading north. Motorists advised to practice absolute defensive safety cautions.",
-          originalUrl: "https://www.rcmp-grc.gc.ca/en/news/2026/warman-dangerous-driver",
-          publishedAt: new Date(Date.now() - 45 * 60000).toISOString(),
-          locationText: "Highway 11 near Warman, SK"
-        },
-        {
-          id: "evt-sim-103",
-          sourceKey: "saskatchewan_gov_news",
-          sourceName: "Saskatchewan Government / SIRT",
-          sourceType: "government" as SourceType,
-          title: "SIRT Commences Inquiry into Prince Albert Detention Incident",
-          summary: "The Serious Incident Response Team confirmed launch of a transparent public inquiry following a residential detention security event report in Northern Saskatchewan district.",
-          originalUrl: "https://www.saskatchewan.ca/government/news-and-media/sirt-pa-detention",
-          publishedAt: new Date(Date.now() - 90 * 60000).toISOString(),
-          locationText: "Prince Albert Provincial Correction Complex, SK"
+      if (!events.some(e => e.id === evt.id || e.sourceHash === evt.sourceHash) && !addedList.some(e => e.id === evt.id)) {
+        if (isIncidentCompliant(evt)) {
+          await saveIncident(evt);
+          addedList.push(evt);
         }
-      ];
-
-      const processedSeeds: EventItem[] = [];
-      for (const raw of rawSeeds) {
-        const geocoded = await geocodeLocation(raw.locationText, raw.sourceKey);
-        const classified = ruleBasedClassifier(raw.title, raw.summary);
-        
-        processedSeeds.push({
-          id: raw.id,
-          sourceKey: raw.sourceKey,
-          sourceName: raw.sourceName,
-          sourceType: raw.sourceType,
-          title: raw.title,
-          summary: raw.summary,
-          originalUrl: raw.originalUrl,
-          publishedAt: raw.publishedAt,
-          retrievedAt: new Date().toISOString(),
-          eventType: classified.eventType,
-          severity: classified.severity,
-          confidence: classified.confidence,
-          locationText: geocoded.locationText,
-          latitude: geocoded.latitude,
-          longitude: geocoded.longitude,
-          locationPrecision: geocoded.locationPrecision,
-          locationConfidence: geocoded.locationConfidence,
-          sourceHash: "simulated-hash-" + raw.id,
-          createdAt: new Date().toISOString()
-        });
       }
-
-      if (!events.find(e => e.id === "evt-sim-101")) {
-        addedList.push(...processedSeeds);
-      }
-      
-      events.unshift(...addedList);
-      
-      res.json({
-        success: true,
-        count: addedList.length,
-        addedEvents: addedList,
-        message: addedList.length > 0 
-          ? `Aistudio-guided dynamic sync successful! Sync'd ${addedList.length} total events (including live crime map).`
-          : "All recent bulletins are already synchronized with your Saskatoon safety dashboard."
-      });
-      return;
     }
 
-    const ai = getGenAI();
+    // 3. Demo simulated generation (Only if DEMO_MODE environment is explicitly flagged true)
+    const isDemoActive = DEMO_MODE || req.body?.demo === true || req.query?.demo === "true";
+    if (isDemoActive) {
+      console.log("[Ingestion Engine] Ingestion active in DEMO_MODE. Loading simulated backup/seed safety warnings...");
+      if (!isApiKeyConfigured) {
+        const rawSeeds = [
+          {
+            id: "evt-sim-101",
+            sourceKey: "saskatoon_police_news",
+            sourceName: "Saskatoon Police News (Demo)",
+            sourceType: "official" as SourceType,
+            title: "Active Stabbing Incident Inquiry on 8th Street East",
+            summary: "Officers cordoned off a gas station entrance following a broad-daylight stabbing event. One victim transported in stable condition. Search continues for matching suspect vest description.",
+            originalUrl: "https://saskatoonpolice.ca/news/simulated-stabbing-8th",
+            publishedAt: new Date().toISOString(),
+            locationText: "860 8th Street East, Saskatoon, SK"
+          },
+          {
+            id: "evt-sim-102",
+            sourceKey: "rcmp_saskatchewan_news",
+            sourceName: "Saskatchewan RCMP News (Demo)",
+            sourceType: "official" as SourceType,
+            title: "Dangerous Driver Alert Near Warman Corridor",
+            summary: "RCMP dispatched units targeting reports of an erratically maneuvering truck transport heading north. Motorists advised to practice absolute defensive safety cautions.",
+            originalUrl: "https://www.rcmp-grc.gc.ca/en/news/2026/warman-dangerous-driver",
+            publishedAt: new Date(Date.now() - 45 * 60000).toISOString(),
+            locationText: "Highway 11 near Warman, SK"
+          },
+          {
+            id: "evt-sim-103",
+            sourceKey: "saskatchewan_gov_news",
+            sourceName: "Saskatchewan Government / SIRT (Demo)",
+            sourceType: "government" as SourceType,
+            title: "SIRT Commences Inquiry into Prince Albert Detention Incident",
+            summary: "The Serious Incident Response Team confirmed launch of a transparent public inquiry following a residential detention security event report in Northern Saskatchewan district.",
+            originalUrl: "https://www.saskatchewan.ca/government/news-and-media/sirt-pa-detention",
+            publishedAt: new Date(Date.now() - 90 * 60000).toISOString(),
+            locationText: "Prince Albert Provincial Correction Complex, SK"
+          }
+        ];
 
-    // Actual RSS live bulletin scraping approximation using Gemini Search Grounding / Generation simulation
-    const prompt = `Simulate an ingestion crawl of Saskatoon Police bulletins, Saskatchewan RCMP notices, and Government SIRT press statements from June 2026.
+        const processedSeeds: EventItem[] = [];
+        for (const raw of rawSeeds) {
+          const geocoded = await geocodeLocation(raw.locationText, raw.sourceKey);
+          const classified = ruleBasedClassifier(raw.title, raw.summary);
+          
+          processedSeeds.push({
+            id: raw.id,
+            sourceKey: raw.sourceKey,
+            sourceName: raw.sourceName,
+            sourceType: raw.sourceType,
+            title: raw.title,
+            summary: raw.summary,
+            originalUrl: raw.originalUrl,
+            publishedAt: raw.publishedAt,
+            retrievedAt: new Date().toISOString(),
+            eventType: classified.eventType,
+            severity: classified.severity,
+            confidence: classified.confidence,
+            locationText: geocoded.locationText,
+            latitude: geocoded.latitude,
+            longitude: geocoded.longitude,
+            locationPrecision: geocoded.locationPrecision,
+            locationConfidence: geocoded.locationConfidence,
+            sourceHash: "simulated-hash-" + raw.id,
+            createdAt: new Date().toISOString()
+          });
+        }
+
+        for (const item of processedSeeds) {
+          if (!events.some(e => e.id === item.id) && isIncidentCompliant(item)) {
+            await saveIncident(item);
+            addedList.push(item);
+          }
+        }
+      } else {
+        const ai = getGenAI();
+        const prompt = `Simulate an ingestion crawl of Saskatoon Police bulletins, Saskatchewan RCMP notices, and Government SIRT press statements from June 2026.
 Generate exactly 3 brand-new, highly realistic public safety incident events that could have occurred in Saskatoon, Saskatchewan within the last 24 hours.
 Your structured output must match the array schemas. Ensure coordinates are placed around Saskatoon (lat: ~52.13, lng: ~-106.67) or major Saskatchewan municipalities.
 Use actual local Saskatoon landmarks (e.g., Preston Crossing, Stonebridge, Spadina Crescent, Circle Drive, Idylwyld Dr, 22nd Street West, etc.) for authentic geocoding.`;
 
-    const aiResponse = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              title: { type: Type.STRING, description: "Sucinct incident headline starting with active state" },
-              summary: { type: Type.STRING, description: "1-2 sentence descriptive public safety summary" },
-              eventType: { type: Type.STRING, description: "Incident classification category match" },
-              severity: { type: Type.STRING, description: "low, medium, high, critical" },
-              locationText: { type: Type.STRING, description: "Landmark, block name, or intersection" },
-              latitude: { type: Type.NUMBER, description: "Saskatoon/Saskatchewan precise latitude number" },
-              longitude: { type: Type.NUMBER, description: "Saskatoon/Saskatchewan precise longitude number" },
-              locationPrecision: { type: Type.STRING, description: "exact, block, intersection, neighbourhood, city, unknown" },
-              sourceKey: { type: Type.STRING, description: "One of: saskatoon_police_news, rcmp_saskatchewan_news, saskatchewan_gov_news" },
-              sourceName: { type: Type.STRING, description: "User readable publisher name" },
-              sourceType: { type: Type.STRING, description: "official, government, or media" }
-            },
-            required: ["title", "summary", "eventType", "severity", "locationText", "latitude", "longitude", "locationPrecision", "sourceKey", "sourceName", "sourceType"]
+        const aiResponse = await ai.models.generateContent({
+          model: "gemini-3.5-flash",
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING, description: "Sucinct headline" },
+                  summary: { type: Type.STRING, description: "1-2 sentence descriptive safety summary" },
+                  eventType: { type: Type.STRING, description: "Incident classification category" },
+                  severity: { type: Type.STRING, description: "low, medium, high, critical" },
+                  locationText: { type: Type.STRING, description: "Landmark, block name, or intersection" },
+                  latitude: { type: Type.NUMBER, description: "precise latitude" },
+                  longitude: { type: Type.NUMBER, description: "precise longitude" },
+                  locationPrecision: { type: Type.STRING, description: "exact, block, intersection, neighbourhood, city, unknown" },
+                  sourceKey: { type: Type.STRING, description: "saskatoon_police_news" },
+                  sourceName: { type: Type.STRING, description: "Saskatoon Police News" },
+                  sourceType: { type: Type.STRING, description: "official" }
+                },
+                required: ["title", "summary", "eventType", "severity", "locationText", "latitude", "longitude", "locationPrecision", "sourceKey", "sourceName", "sourceType"]
+              }
+            }
+          }
+        });
+
+        const parsedArray = JSON.parse(aiResponse.text.trim());
+        for (const item of parsedArray) {
+          const customId = "evt-ingest-" + Math.random().toString(36).substr(2, 9);
+          const geocoded = await geocodeLocation(item.locationText || "Saskatoon, SK", item.sourceKey || "saskatoon_police_news");
+          const ruleClass = ruleBasedClassifier(item.title, item.summary);
+
+          const newEvt: EventItem = {
+            id: customId,
+            sourceKey: item.sourceKey || "saskatoon_police_news",
+            sourceName: item.sourceName || "Saskatoon Police News (Demo)",
+            sourceType: (item.sourceType || "official") as SourceType,
+            title: item.title,
+            summary: item.summary,
+            originalUrl: `https://saskatoonsafetymap.ca/demo-bulletins/bulletin-${Math.floor(Math.random() * 100000)}`,
+            publishedAt: new Date(Date.now() - Math.floor(Math.random() * 12 * 3600000)).toISOString(),
+            retrievedAt: new Date().toISOString(),
+            eventType: ruleClass.eventType || item.eventType || "other_public_safety",
+            severity: (ruleClass.severity || item.severity || "medium") as SeverityType,
+            confidence: ruleClass.confidence || 0.94,
+            locationText: geocoded.locationText,
+            latitude: geocoded.latitude,
+            longitude: geocoded.longitude,
+            locationPrecision: geocoded.locationPrecision,
+            locationConfidence: geocoded.locationConfidence,
+            sourceHash: `ingest-hash-${customId}`,
+            createdAt: new Date().toISOString()
+          };
+
+          if (isIncidentCompliant(newEvt)) {
+            await saveIncident(newEvt);
+            addedList.push(newEvt);
           }
         }
       }
-    });
-
-      const parsedArray = JSON.parse(aiResponse.text.trim());
-
-    for (const item of parsedArray) {
-      const customId = "evt-ingest-" + Math.random().toString(36).substr(2, 9);
-      
-      const geocoded = await geocodeLocation(item.locationText || "Saskatoon, SK", item.sourceKey || "saskatoon_police_news");
-      const ruleClass = ruleBasedClassifier(item.title, item.summary);
-
-      const newEvt: EventItem = {
-        id: customId,
-        sourceKey: item.sourceKey || "saskatoon_police_news",
-        sourceName: item.sourceName || "Saskatoon Police News",
-        sourceType: (item.sourceType || "official") as SourceType,
-        title: item.title,
-        summary: item.summary,
-        originalUrl: `https://saskatoonpolice.ca/news/bulletin-${Math.floor(Math.random() * 100000)}`,
-        publishedAt: new Date(Date.now() - Math.floor(Math.random() * 12 * 3600000)).toISOString(), // Happened hours ago
-        retrievedAt: new Date().toISOString(),
-        eventType: ruleClass.eventType || item.eventType || "other_public_safety",
-        severity: (ruleClass.severity || item.severity || "medium") as SeverityType,
-        confidence: ruleClass.confidence || 0.94,
-        locationText: geocoded.locationText,
-        latitude: geocoded.latitude,
-        longitude: geocoded.longitude,
-        locationPrecision: geocoded.locationPrecision,
-        locationConfidence: geocoded.locationConfidence,
-        sourceHash: `ingest-hash-${customId}`,
-        createdAt: new Date().toISOString()
-      };
-
-      addedList.push(newEvt);
     }
 
-    events.unshift(...addedList);
     res.json({
       success: true,
       count: addedList.length,
       addedEvents: addedList,
-      message: `Gemini-grounded safety crawler and Nominatim geocoder synchronized ${addedList.length} recent Saskatoon & Saskatchewan public safety incidents!`
+      message: addedList.length > 0
+        ? `Safety data synchronization completes! Appended ${addedList.length} fresh verified incident bulletins.`
+        : "No new unique, compliant safety bulletins found across the region."
     });
   } catch (error: any) {
     console.error("Critical feeds ingestion error:", error);
@@ -2799,11 +3145,21 @@ function runPythonAdapterIngestion(): Promise<EventItem[]> {
         try {
           const rawEvents = JSON.parse(exportStdout);
           // Apply fallback Unsplash safety images based on classified eventType
-          const mappedEvents: EventItem[] = rawEvents.map((e: any) => ({
-            ...e,
-            imageUrls: getEventImagesByType(e.eventType),
-            createdAt: e.createdAt || new Date().toISOString()
-          }));
+          const mappedEvents: EventItem[] = rawEvents.map((e: any) => {
+            let sKey = "saskatoon_police_news"; // default fallback
+            const nameLower = (e.sourceName || "").toLowerCase();
+            if (nameLower.includes("rcmp")) {
+              sKey = "rcmp_saskatchewan_news";
+            } else if (nameLower.includes("government") || nameLower.includes("saskatchewan")) {
+              sKey = "saskatchewan_gov_news";
+            }
+            return {
+              ...e,
+              sourceKey: e.sourceKey || sKey,
+              imageUrls: getEventImagesByType(e.eventType),
+              createdAt: e.createdAt || new Date().toISOString()
+            };
+          });
           console.log(`[Python Bridge] Successfully loaded ${mappedEvents.length} geocoded events from Python.`);
           resolve(mappedEvents);
         } catch (parseErr: any) {
@@ -2818,6 +3174,14 @@ function runPythonAdapterIngestion(): Promise<EventItem[]> {
 
 // Start listening and serve client files using Vite’s middleware mode
 async function startServer() {
+  // Synchronize and load verified incidents from Firestore first (seeding if empty)
+  try {
+    console.log("[Startup] Syncing and validating incidents from Firestore database...");
+    await syncEventsFromFirestore();
+  } catch (syncErr) {
+    console.error("[Startup Error] Initial Firestore sync failed:", syncErr);
+  }
+
   if (process.env.NODE_ENV !== "production") {
     // Vite middleware for smooth dev feedback
     const vite = await createViteServer({
@@ -2857,9 +3221,15 @@ async function startServer() {
         return !events.some(existing => existing.id === newItem.id || existing.sourceHash === newItem.sourceHash);
       });
       
+      let persistedCount = 0;
       if (newItems.length > 0) {
-        events.unshift(...newItems);
-        console.log(`[Startup] Saskatchewan background load complete. Appended ${newItems.length} fresh live municipal events.`);
+        for (const item of newItems) {
+          if (isIncidentCompliant(item)) {
+            await saveIncident(item);
+            persistedCount++;
+          }
+        }
+        console.log(`[Startup] Saskatchewan background load complete. Persisted and cached ${persistedCount} fresh compliant live events.`);
       } else {
         console.log("[Startup] Saskatchewan background load complete. No new unique events found.");
       }

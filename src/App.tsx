@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { AlertCircle, ShieldAlert, Sparkles, X, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, HelpCircle, Navigation, Info, ExternalLink, Bookmark, TrendingUp, Upload, Download, BarChart3, Wifi, WifiOff, MessageSquare, MapPin, ArrowLeftRight, Flame, Plus, Minus, Settings, Filter, Layers, Clock, Minimize2, Maximize2, Bell } from "lucide-react";
+import { AlertCircle, ShieldAlert, Sparkles, X, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, HelpCircle, Navigation, Info, ExternalLink, Bookmark, TrendingUp, Upload, Download, BarChart3, Wifi, WifiOff, MessageSquare, MapPin, ArrowLeftRight, Flame, Plus, Minus, Settings, Filter, Layers, Clock, Minimize2, Maximize2, Bell, LogIn, LogOut, Database, Cloud, ShieldCheck } from "lucide-react";
 import { EventItem, EventSource, SeverityType, CustomRouteItem } from "./types";
+import { auth, googleProvider, signInWithPopup, signOut } from "./lib/firebase";
+import { onAuthStateChanged, User } from "firebase/auth";
 import EventFilters, { FilterState } from "./components/EventFilters";
 import IncidentMap from "./components/IncidentMap";
 import EventDrawer from "./components/EventDrawer";
@@ -27,6 +29,22 @@ export default function App() {
   const [sources, setSources] = useState<EventSource[]>([]);
   const [bookmarks, setBookmarks] = useState<string[]>([]);
   const [bookmarkNotes, setBookmarkNotes] = useState<Record<string, string>>({});
+
+  // Firebase Auth & Cloud Sync States
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [bookmarksReady, setBookmarksReady] = useState<boolean>(false);
+  const [guestUid] = useState<string>(() => {
+    try {
+      let storedId = localStorage.getItem("saskatchewan_guest_uid");
+      if (!storedId) {
+        storedId = `guest-${Math.random().toString(36).substring(2, 11)}`;
+        localStorage.setItem("saskatchewan_guest_uid", storedId);
+      }
+      return storedId;
+    } catch {
+      return `guest-fb-${Math.random().toString(36).substring(2, 11)}`;
+    }
+  });
 
   // Compare Incidents States
   const [compareEventIds, setCompareEventIds] = useState<string[]>([]);
@@ -76,6 +94,7 @@ export default function App() {
     isAlertZone?: boolean;
     zoneType?: 'home' | 'apartment' | 'hospital' | 'travel_route' | 'custom';
     alertRadiusMeters?: number;
+    userId?: string;
   }>>(() => {
     try {
       const saved = localStorage.getItem("saskatoon_custom_pins");
@@ -85,9 +104,64 @@ export default function App() {
     }
   });
 
+  // Load custom alert zones from the Firestore API on mount
+  useEffect(() => {
+    fetch("/api/alert-zones")
+      .then(r => {
+        if (!r.ok) throw new Error("API loading issue");
+        return r.json();
+      })
+      .then(data => {
+        if (Array.isArray(data) && data.length > 0) {
+          const mapped = data.map(item => ({
+            id: item.id,
+            latitude: item.coordinates ? item.coordinates[0] : (item.latitude || 52.13),
+            longitude: item.coordinates ? item.coordinates[1] : (item.longitude || -106.67),
+            title: item.name || item.title || "Custom Zone",
+            note: item.name || item.title || "Custom Zone Description",
+            severity: item.severity || "medium",
+            createdAt: item.createdAt || new Date().toISOString(),
+            isAlertZone: true,
+            alertRadiusMeters: item.radius || 150
+          }));
+          setCustomPins(mapped);
+        }
+      })
+      .catch(err => console.warn("Note: Using local offline alert zones fallback.", err.message));
+  }, []);
+
   useEffect(() => {
     localStorage.setItem("saskatoon_custom_pins", JSON.stringify(customPins));
-  }, [customPins]);
+    
+    // Sync with Firestore backend API with debounce to optimize bandwidth
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      const pinsToSync = customPins.map(pin => ({
+        ...pin,
+        userId: pin.userId || (currentUser ? currentUser.uid : guestUid)
+      }));
+
+      fetch("/api/alert-zones/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(pinsToSync),
+        signal: controller.signal
+      })
+        .then(r => r.json())
+        .then(res => console.log("[Sync] Alert zones sync verified by database:", res))
+        .catch(err => {
+          if (err.name !== "AbortError") {
+            console.error("[Sync Error] Failed to synch alert zones with Firestore:", err);
+          }
+        });
+    }, 600);
+    
+    return () => {
+      controller.abort();
+      clearTimeout(timeout);
+    };
+  }, [customPins, currentUser, guestUid]);
+
 
   // Lifted Custom Travel Routes State
   const [customRoutes, setCustomRoutes] = useState<CustomRouteItem[]>(() => {
@@ -552,27 +626,24 @@ export default function App() {
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
 
-    // Load initial bookmarks from standard safe LocalStorage keys
+    // Load auto refresh configuration and subscribe to Firebase authentication changes
     try {
-      const stored = localStorage.getItem("saskatoon_bookmarks");
-      if (stored) {
-        setBookmarks(JSON.parse(stored));
-      }
-      const storedNotes = localStorage.getItem("saskatoon_bookmark_notes");
-      if (storedNotes) {
-        setBookmarkNotes(JSON.parse(storedNotes));
-      }
       const storedRefresh = localStorage.getItem("saskatoon_auto_refresh");
       if (storedRefresh === "true") {
         setAutoRefreshEnabled(true);
       }
     } catch (e) {
-      console.error("Local storage bookmarks retrieval rejected:", e);
+      console.error("Local storage auto refresh settings load failed:", e);
     }
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (usr) => {
+      setCurrentUser(usr);
+    });
 
     return () => {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
+      unsubscribeAuth();
     };
   }, []);
 
@@ -598,7 +669,97 @@ export default function App() {
     }
   }, [events]);
 
-  // 3. Dual Bookmarking persistence handling
+  // 3a. Retrieve user-specific bookmarks and custom notes from Firestore database
+  useEffect(() => {
+    const uid = currentUser ? currentUser.uid : guestUid;
+    if (!uid) return;
+    
+    setBookmarksReady(false);
+    fetch(`/api/bookmarks?userId=${uid}`)
+      .then(res => {
+        if (!res.ok) throw new Error("Database loading issue");
+        return res.json();
+      })
+      .then((data: any[]) => {
+        if (Array.isArray(data)) {
+          console.log(`[Firebase DB] Successfully loaded ${data.length} cloud bookmarks.`);
+          const ids = data.map(b => b.eventId);
+          const notes: Record<string, string> = {};
+          data.forEach(b => {
+            if (b.note) {
+              notes[b.eventId] = b.note;
+            }
+          });
+          setBookmarks(ids);
+          setBookmarkNotes(notes);
+        }
+        setBookmarksReady(true);
+      })
+      .catch((err: any) => {
+        console.warn("[Firebase Fallback] Loading local offline cache bookmarks.", err.message);
+        try {
+          const stored = localStorage.getItem("saskatoon_bookmarks");
+          if (stored) {
+            setBookmarks(JSON.parse(stored));
+          }
+          const storedNotes = localStorage.getItem("saskatoon_bookmark_notes");
+          if (storedNotes) {
+            setBookmarkNotes(JSON.parse(storedNotes));
+          }
+        } catch (e) {
+          console.error("Local storage bookmarks retrieval rejected:", e);
+        }
+        setBookmarksReady(true);
+      });
+  }, [currentUser, guestUid]);
+
+  // 3b. Sync bookmarks and notes back to Firestore with elegant debouncing representation
+  useEffect(() => {
+    if (!bookmarksReady) return;
+
+    const uid = currentUser ? currentUser.uid : guestUid;
+    if (!uid) return;
+
+    // Cache immediately in local storage for instantaneous offline local recovery
+    try {
+      localStorage.setItem("saskatoon_bookmarks", JSON.stringify(bookmarks));
+      localStorage.setItem("saskatoon_bookmark_notes", JSON.stringify(bookmarkNotes));
+    } catch (e) {
+      console.error("Failed to backup bookmarks to localStorage:", e);
+    }
+
+    const payload = bookmarks.map(id => ({
+      id: `bmark-${uid}-${id}`,
+      userId: uid,
+      eventId: id,
+      note: bookmarkNotes[id] || "",
+      createdAt: new Date().toISOString()
+    }));
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      fetch("/api/bookmarks/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: uid, list: payload }),
+        signal: controller.signal
+      })
+        .then(r => r.json())
+        .then(res => console.log("[Sync] Saved bookmarks synced with cloud database:", res))
+        .catch(err => {
+          if (err.name !== "AbortError") {
+            console.error("[Sync Error] Failed to sync bookmarks to Firestore:", err);
+          }
+        });
+    }, 600);
+
+    return () => {
+      controller.abort();
+      clearTimeout(timeout);
+    };
+  }, [bookmarks, bookmarkNotes, currentUser, guestUid, bookmarksReady]);
+
+  // 3c. Bookmarking toggling handlers
   const handleToggleBookmark = (eventId: string) => {
     let updated: string[];
     const updatedNotes = { ...bookmarkNotes };
@@ -613,22 +774,11 @@ export default function App() {
 
     setBookmarks(updated);
     setBookmarkNotes(updatedNotes);
-    try {
-      localStorage.setItem("saskatoon_bookmarks", JSON.stringify(updated));
-      localStorage.setItem("saskatoon_bookmark_notes", JSON.stringify(updatedNotes));
-    } catch (e) {
-      console.error("Writing bookmarks to local storage failed:", e);
-    }
   };
 
   const handleUpdateBookmarkNote = (eventId: string, noteText: string) => {
     const updatedNotes = { ...bookmarkNotes, [eventId]: noteText };
     setBookmarkNotes(updatedNotes);
-    try {
-      localStorage.setItem("saskatoon_bookmark_notes", JSON.stringify(updatedNotes));
-    } catch (e) {
-      console.error("Writing bookmark notes to local storage failed:", e);
-    }
   };
 
   // --- REAL-TIME PROXIMITY ALERT SCANNER ENGINE STATES ---
@@ -1305,6 +1455,80 @@ export default function App() {
                 <Settings size={14 * headerScale} className="text-blue-400 shrink-0" />
                 <span>Sizing Dashboard</span>
               </button>
+
+              {/* Firestore Cloud Sync & Google Auth */}
+              {currentUser ? (
+                <div 
+                  style={{
+                    fontSize: `${12 * headerScale}px`,
+                    padding: `${(sizes.header?.isMinimized ? 3 : 5) * headerScale}px ${(sizes.header?.isMinimized ? 6 : 10) * headerScale}px`
+                  }}
+                  className="bg-emerald-500/10 border border-emerald-500/30 text-white rounded flex items-center gap-2 transition-all shadow-sm"
+                >
+                  <div className="flex items-center gap-1.5 normal-case font-medium">
+                    {currentUser.photoURL ? (
+                      <img 
+                        src={currentUser.photoURL} 
+                        alt="Profile" 
+                        className="h-5 w-5 rounded-full border border-emerald-500"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="h-5 w-5 rounded-full bg-emerald-600 flex items-center justify-center font-bold text-[10px] text-white">
+                        {currentUser.displayName ? currentUser.displayName[0].toUpperCase() : "W"}
+                      </div>
+                    )}
+                    <span className="text-emerald-400 font-bold hidden xl:inline">
+                      {currentUser.displayName || "Watch Officer"}
+                    </span>
+                  </div>
+                  
+                  <span className="flex items-center gap-1 text-[10px] text-slate-400 font-mono">
+                    <Database size={11} className="text-emerald-400 animate-pulse" />
+                    Cloud Synced
+                  </span>
+
+                  <button
+                    type="button"
+                    title="Log Out of Cloud Sync"
+                    onClick={async () => {
+                      try {
+                        await signOut(auth);
+                        setSuccessToast("Logged out of safety registry. Operating in Cache Mode.");
+                      } catch (err: any) {
+                        console.error("[Logout Error]:", err);
+                      }
+                    }}
+                    className="cursor-pointer hover:text-red-400 text-slate-300 ml-1 border-none focus:outline-none"
+                  >
+                    <LogOut size={13} />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  id="google-signin-btn"
+                  onClick={async () => {
+                    try {
+                      const result = await signInWithPopup(auth, googleProvider);
+                      if (result.user) {
+                        setSuccessToast(`Welcome, ${result.user.displayName || "Saskatoon Watch Officer"}! Your cloud sync is active.`);
+                      }
+                    } catch (err: any) {
+                      console.error("[Login Error] Google sign-in rejected:", err);
+                      setErrorMessage(`Sign-in could not be completed. Details: ${err.message || "Request timed out"}`);
+                    }
+                  }}
+                  style={{
+                    fontSize: `${12 * headerScale}px`,
+                    padding: `${(sizes.header?.isMinimized ? 4 : 8) * headerScale}px ${(sizes.header?.isMinimized ? 10 : 14) * headerScale}px`
+                  }}
+                  className="cursor-pointer bg-blue-600 hover:bg-blue-500 border border-blue-500 text-white font-semibold rounded flex items-center gap-1.5 transition-all shadow-sm font-sans"
+                >
+                  <LogIn size={14 * headerScale} className="text-white animate-pulse" />
+                  <span>Google Cloud Sync</span>
+                </button>
+              )}
             </div>
             
             {/* Display status */}

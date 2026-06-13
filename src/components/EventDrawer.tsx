@@ -271,16 +271,6 @@ export default function EventDrawer({
     setLocalNote(val);
     setSaveStatus("saving");
 
-    // Immediate mechanical persistence directly to localStorage on every single keystroke
-    try {
-      const storedNotes = localStorage.getItem("saskatoon_bookmark_notes");
-      const currentNotes = storedNotes ? JSON.parse(storedNotes) : {};
-      currentNotes[selectedEvent.id] = val;
-      localStorage.setItem("saskatoon_bookmark_notes", JSON.stringify(currentNotes));
-    } catch (err) {
-      console.error("Direct auto-save write to localStorage failed:", err);
-    }
-
     // Pass up to mother memory states
     onUpdateBookmarkNote(selectedEvent.id, val);
 

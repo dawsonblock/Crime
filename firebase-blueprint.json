@@ -1,0 +1,321 @@
+{
+  "entities": {
+    "Source": {
+      "title": "Source",
+      "description": "Details of the crawled news or official public safety sources.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Unique identifier of the source."
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable name of the source."
+        },
+        "sourceType": {
+          "type": "string",
+          "description": "Type of the source (official, media, government)."
+        },
+        "baseUrl": {
+          "type": "string",
+          "description": "Target scraper URL path."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether the source ingestion is active."
+        }
+      },
+      "required": [
+        "key",
+        "name",
+        "sourceType",
+        "baseUrl",
+        "enabled"
+      ]
+    },
+    "RawItem": {
+      "title": "RawItem",
+      "description": "Unaltered raw crawled stream entry stored as raw history prior to deduplication.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "sourceKey": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "originalUrl": {
+          "type": "string"
+        },
+        "publishedAt": {
+          "type": "string"
+        },
+        "retrievedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "sourceKey",
+        "title",
+        "originalUrl",
+        "publishedAt"
+      ]
+    },
+    "CanonicalIncident": {
+      "title": "CanonicalIncident",
+      "description": "A deduplicated, geocoded, and classified incident with verified location and timestamp info.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "sourceKey": {
+          "type": "string"
+        },
+        "sourceName": {
+          "type": "string"
+        },
+        "sourceType": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "originalUrl": {
+          "type": "string"
+        },
+        "publishedAt": {
+          "type": "string"
+        },
+        "retrievedAt": {
+          "type": "string"
+        },
+        "eventType": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number"
+        },
+        "locationText": {
+          "type": "string"
+        },
+        "latitude": {
+          "type": "number"
+        },
+        "longitude": {
+          "type": "number"
+        },
+        "locationPrecision": {
+          "type": "string"
+        },
+        "locationConfidence": {
+          "type": "number"
+        },
+        "sourceHash": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "imageUrls": {
+          "type": "array"
+        },
+        "threatScore": {
+          "type": "number"
+        },
+        "isVerified": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "sourceKey",
+        "title",
+        "summary",
+        "originalUrl",
+        "publishedAt",
+        "latitude",
+        "longitude",
+        "createdAt"
+      ]
+    },
+    "IngestionRun": {
+      "title": "IngestionRun",
+      "description": "Logs tracking successful background ingestion run cycles.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "runTime": {
+          "type": "string"
+        },
+        "addedCount": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string"
+        },
+        "logOutput": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "runTime",
+        "addedCount",
+        "status"
+      ]
+    },
+    "AISummary": {
+      "title": "AISummary",
+      "description": "Generated analytical daily briefings and forecasts cached for users.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "daily-briefing",
+            "weekly-forecast"
+          ]
+        },
+        "content": {
+          "type": "string"
+        },
+        "generatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "content",
+        "generatedAt"
+      ]
+    },
+    "AlertZone": {
+      "title": "AlertZone",
+      "description": "Map-drawn threat zones or bookmarks saved by verified coordinators.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "coordinates": {
+          "type": "array"
+        },
+        "radius": {
+          "type": "number"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "severity",
+        "userId",
+        "createdAt"
+      ]
+    },
+    "UserBookmark": {
+      "title": "UserBookmark",
+      "description": "Saskatoon safety incidents bookmarked by community watch members.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "eventId",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/sources/{sourceKey}": {
+      "schema": {
+        "$ref": "#/entities/Source"
+      },
+      "description": "Active configurations for official, media, and sirt RSS channels."
+    },
+    "/raw_items/{itemId}": {
+      "schema": {
+        "$ref": "#/entities/RawItem"
+      },
+      "description": "Unmodified logs of raw scraped crime data entries."
+    },
+    "/canonical_incidents/{incidentId}": {
+      "schema": {
+        "$ref": "#/entities/CanonicalIncident"
+      },
+      "description": "Geocoded and classified safety signals representing the actual map markers."
+    },
+    "/ingestion_runs/{runId}": {
+      "schema": {
+        "$ref": "#/entities/IngestionRun"
+      },
+      "description": "Historical audit logs of completed crawls."
+    },
+    "/ai_summaries/{summaryId}": {
+      "schema": {
+        "$ref": "#/entities/AISummary"
+      },
+      "description": "Generated and cached analytics reports."
+    },
+    "/alert_zones/{zoneId}": {
+      "schema": {
+        "$ref": "#/entities/AlertZone"
+      },
+      "description": "User-sketched boundaries for hazard monitoring."
+    },
+    "/user_bookmarks/{bookmarkId}": {
+      "schema": {
+        "$ref": "#/entities/UserBookmark"
+      },
+      "description": "Custom safety incident bookmark points saved by community users."
+    }
+  }
+}
