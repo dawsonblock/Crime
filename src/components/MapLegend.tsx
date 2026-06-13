@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { HelpCircle, ChevronDown, ChevronUp, AlertOctagon, ShieldAlert, BadgeInfo, Info, MapPin, EyeOff, ShieldCheck, HeartPulse } from "lucide-react";
+import { HelpCircle, ChevronDown, ChevronUp, AlertOctagon, ShieldAlert, BadgeInfo, Info, MapPin, EyeOff, ShieldCheck, HeartPulse, Layers, Eye } from "lucide-react";
 import { SeverityType } from "../types";
 
 interface MapLegendProps {
@@ -8,6 +8,13 @@ interface MapLegendProps {
   onToggleHeatmap: () => void;
   heatmapOpacity: number;
   onToggleOpacity: () => void;
+  setHeatmapOpacity?: (opacity: number) => void;
+  mapStyle: "dark" | "streets" | "satellite";
+  setMapStyle: (style: "dark" | "streets" | "satellite") => void;
+  showPins: boolean;
+  setShowPins: (val: boolean) => void;
+  useWebGLHeatmap: boolean;
+  setUseWebGLHeatmap: (val: boolean) => void;
 }
 
 export default function MapLegend({ 
@@ -15,7 +22,14 @@ export default function MapLegend({
   showHeatmap,
   onToggleHeatmap,
   heatmapOpacity,
-  onToggleOpacity
+  onToggleOpacity,
+  setHeatmapOpacity,
+  mapStyle,
+  setMapStyle,
+  showPins,
+  setShowPins,
+  useWebGLHeatmap,
+  setUseWebGLHeatmap
 }: MapLegendProps) {
   const [isGuideExpanded, setIsGuideExpanded] = useState(false);
 
@@ -259,7 +273,7 @@ export default function MapLegend({
       )}
 
       {/* Main control line */}
-      <div className="pt-2 border-t border-slate-100 flex flex-col md:flex-row items-center justify-between text-[11px] text-slate-500 gap-3">
+      <div className="pt-2 border-t border-slate-100 flex flex-col lg:flex-row items-center justify-between text-[11px] text-slate-500 gap-3 select-none">
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold select-none">
             SASKATOON CENTER
@@ -269,35 +283,115 @@ export default function MapLegend({
           </span>
         </div>
 
-        {/* Heatmap Density controls inside Map Legend Area */}
-        <div className="flex items-center gap-2 select-none">
+        {/* Map Style Controls */}
+        <div className="flex items-center gap-1 bg-slate-100/80 p-0.5 rounded-lg border border-slate-200/60 select-none">
+          <span className="text-[9.5px] uppercase font-mono font-extrabold text-slate-400 px-1.5">Style:</span>
           <button
             type="button"
-            id="legend-heatmap-toggle-btn"
-            onClick={onToggleHeatmap}
-            className={`cursor-pointer px-2.5 py-1 text-[9.5px] font-mono font-extrabold uppercase rounded border transition-all ${
-              showHeatmap
-                ? "bg-blue-50 border-blue-250 text-blue-700"
-                : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50"
+            id="legend-map-style-dark"
+            onClick={() => setMapStyle("dark")}
+            className={`cursor-pointer px-2 py-0.5 text-[9px] font-mono font-bold uppercase rounded-md transition-all ${
+              mapStyle === "dark"
+                ? "bg-slate-800 text-white shadow-sm font-extrabold"
+                : "text-slate-500 hover:text-slate-800 hover:bg-white"
             }`}
           >
-            Heatmap: {showHeatmap ? "ON" : "OFF"}
+            Tactical
           </button>
-          
-          {showHeatmap && (
+          <button
+            type="button"
+            id="legend-map-style-streets"
+            onClick={() => setMapStyle("streets")}
+            className={`cursor-pointer px-2 py-0.5 text-[9px] font-mono font-bold uppercase rounded-md transition-all ${
+              mapStyle === "streets"
+                ? "bg-blue-600 text-white shadow-sm font-extrabold"
+                : "text-slate-500 hover:text-slate-800 hover:bg-white"
+            }`}
+          >
+            Street
+          </button>
+          <button
+            type="button"
+            id="legend-map-style-satellite"
+            onClick={() => setMapStyle("satellite")}
+            className={`cursor-pointer px-2 py-0.5 text-[9px] font-mono font-bold uppercase rounded-md transition-all ${
+              mapStyle === "satellite"
+                ? "bg-emerald-600 text-white shadow-sm font-extrabold"
+                : "text-slate-500 hover:text-slate-800 hover:bg-white"
+            }`}
+          >
+            Satellite
+          </button>
+        </div>
+
+        {/* High performance dynamic mode switcher: switch between Individual Pins or WebGL Heatmap */}
+        <div className="flex items-center gap-2 select-none flex-wrap">
+          <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+            <span className="text-[9.5px] uppercase font-mono font-black text-slate-400 px-1.5">View Mode:</span>
             <button
               type="button"
-              id="legend-heatmap-opacity-btn"
-              onClick={onToggleOpacity}
-              className="cursor-pointer px-2.5 py-1 text-[9.5px] font-mono font-extrabold uppercase rounded border bg-slate-900 border-slate-800 text-white hover:bg-slate-800 transition-all flex items-center gap-1.5 shadow-sm animate-fadeIn"
-              title="Toggle Heatmap Opacity layer density for clearer view of pins"
+              id="legend-toggle-pins-btn"
+              onClick={() => {
+                setShowPins(true);
+                if (showHeatmap) {
+                  onToggleHeatmap(); // Turn off heatmap
+                }
+              }}
+              className={`cursor-pointer px-2.5 py-0.5 text-[9px] font-mono font-bold uppercase rounded-md transition-all flex items-center gap-1 ${
+                showPins && !showHeatmap
+                  ? "bg-slate-850 text-white shadow-sm font-extrabold"
+                  : "text-slate-500 hover:text-slate-850 hover:bg-white"
+              }`}
+              title="Show individual & clustered incident pins on map"
             >
-              <span>Opacity:</span>
-              <span className="text-blue-400 font-semibold">{
-                heatmapOpacity < 0.10 ? "Low (6%)" :
-                heatmapOpacity < 0.30 ? "Mid (18%)" : "High (35%)"
-              }</span>
+              <MapPin size={10} />
+              <span>Pins</span>
             </button>
+
+            <button
+              type="button"
+              id="legend-toggle-heatmap-btn"
+              onClick={() => {
+                setShowPins(false);
+                setUseWebGLHeatmap(true);
+                if (!showHeatmap) {
+                  onToggleHeatmap(); // Turn on heatmap
+                }
+              }}
+              className={`cursor-pointer px-2.5 py-0.5 text-[9px] font-mono font-bold uppercase rounded-md transition-all flex items-center gap-1 ${
+                showHeatmap && useWebGLHeatmap
+                  ? "bg-blue-600 text-white shadow-sm font-extrabold"
+                  : "text-slate-500 hover:text-slate-850 hover:bg-white"
+              }`}
+              title="Activate WebGL hardware-accelerated density heat overlay"
+            >
+              <Layers size={10} />
+              <span>WebGL Heatmap</span>
+            </button>
+          </div>
+
+          {showHeatmap && (
+            <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded shadow-sm text-white text-[9.5px] font-mono select-none animate-fadeIn">
+              <span className="text-slate-400">Opacity:</span>
+              <input
+                type="range"
+                min="5"
+                max="95"
+                value={Math.round(heatmapOpacity * 100)}
+                onChange={(e) => {
+                  if (setHeatmapOpacity) {
+                    setHeatmapOpacity(parseFloat(e.target.value) / 100);
+                  } else {
+                    onToggleOpacity();
+                  }
+                }}
+                className="w-16 sm:w-20 lg:w-24 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-450"
+                title="Slide to adjust WebGL heatmap opacity directly"
+              />
+              <span className="text-blue-450 font-extrabold w-6 text-right">
+                {Math.round(heatmapOpacity * 100)}%
+              </span>
+            </div>
           )}
         </div>
 

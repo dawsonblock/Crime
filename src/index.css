@@ -1,4 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 @import "tailwindcss";
 
 @theme {
@@ -7,21 +6,19 @@
 }
 
 /* Scrollbar layout styles */
-@layer utilities {
-  .scrollbar-thin::-webkit-scrollbar {
-    width: 5px;
-    height: 5px;
-  }
-  .scrollbar-thin::-webkit-scrollbar-track {
-    background: #0f172a;
-  }
-  .scrollbar-thin::-webkit-scrollbar-thumb {
-    background: #1e293b;
-    border-radius: 9px;
-  }
-  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-    background: #334155;
-  }
+.scrollbar-thin::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 9px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: #334155;
 }
 
 /* Custom leaflet map overrides for integration styling */

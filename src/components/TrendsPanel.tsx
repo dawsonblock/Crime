@@ -3,7 +3,8 @@ import { motion } from "motion/react";
 import Markdown from "react-markdown";
 import {
   TrendingUp, TrendingDown, Calendar, AlertTriangle, AlertCircle,
-  Clock, Activity, Info, BarChart3, CornerDownRight, Zap
+  Clock, Activity, Info, BarChart3, CornerDownRight, Zap,
+  Smile, Frown, ShieldCheck, HeartHandshake
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis,
@@ -12,6 +13,7 @@ import {
 } from "recharts";
 
 const COLORS = ["#2563EB", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6", "#64748B"];
+const TYPE_COLORS = ["#3B82F6", "#EC4899", "#8B5CF6", "#10B981", "#F59E0B", "#64748B"];
 import { EventItem, SeverityType } from "../types";
 
 interface TrendsPanelProps {
@@ -22,6 +24,10 @@ interface DailyCount {
   dateStr: string;   // MM/DD
   fullDate: string;  // MMM DD, YYYY
   total: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
   criticalHigh: number;
   mediumLow: number;
 }
@@ -99,14 +105,20 @@ export default function TrendsPanel({ events }: TrendsPanelProps) {
         }
       });
 
-      const criticalHigh = dayEvents.filter(
-        (e) => e.severity === "critical" || e.severity === "high"
-      ).length;
+      const critical = dayEvents.filter((e) => e.severity === "critical").length;
+      const high = dayEvents.filter((e) => e.severity === "high").length;
+      const medium = dayEvents.filter((e) => e.severity === "medium").length;
+      const low = dayEvents.filter((e) => e.severity === "low").length;
+      const criticalHigh = critical + high;
 
       data.push({
         dateStr: displayDate,
         fullDate: fullDisplayDate,
         total: dayEvents.length,
+        critical,
+        high,
+        medium,
+        low,
         criticalHigh,
         mediumLow: dayEvents.length - criticalHigh,
       });
@@ -227,6 +239,217 @@ export default function TrendsPanel({ events }: TrendsPanelProps) {
     return categoryData.reduce((sum, item) => sum + item.value, 0);
   }, [categoryData]);
 
+  // Calculate detailed distribution of incidents by type for the new Donut Chart
+  const eventTypeData = useMemo(() => {
+    const rawCounts: Record<string, number> = {};
+    
+    events.forEach(evt => {
+      let type = evt.eventType || "other_public_safety";
+      // Normalize type labels: replace underscores/dashes with space & apply capital case
+      let label = type.replace(/_/g, " ").replace(/-/g, " ");
+      label = label.split(" ")
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(" ");
+
+      rawCounts[label] = (rawCounts[label] || 0) + 1;
+    });
+
+    const list = Object.entries(rawCounts).map(([name, value]) => ({
+      name,
+      value
+    }));
+
+    // Sort descending by incident count
+    list.sort((a, b) => b.value - a.value);
+
+    // Limit to top 5 and group the remaining ones to keep the chart clean and legible
+    if (list.length > 5) {
+      const top = list.slice(0, 4);
+      const othersValue = list.slice(4).reduce((sum, item) => sum + item.value, 0);
+      if (othersValue > 0) {
+        top.push({ name: "Other Types", value: othersValue });
+      }
+      return top;
+    }
+
+    return list;
+  }, [events]);
+
+  const totalEventTypeIncidents = useMemo(() => {
+    return eventTypeData.reduce((sum, item) => sum + item.value, 0);
+  }, [eventTypeData]);
+
+  // Rule-based sentiment analysis over 30 days based on keyword profiles and severity weights
+  const sentimentData = useMemo(() => {
+    const data: any[] = [];
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    const now = new Date();
+
+    const positiveWords = [
+      "resolve", "arrest", "custody", "recover", "safe", "found", "secure", 
+      "clear", "stable", "returned", "cooperat", "control", "assist", "peace", 
+      "decrease", "decline", "quiet", "minor"
+    ];
+    const negativeWords = [
+      "weapon", "shoot", "stab", "assault", "robber", "armed", "threat", "fight", 
+      "critical", "violence", "death", "kill", "homicide", "fatal", "drugs", 
+      "abduct", "fire", "arson", "clash", "flee", "stolen", "danger", "hazard", 
+      "emergency", "crash", "collision", "overdose"
+    ];
+
+    for (let i = 29; i >= 0; i--) {
+      const targetDate = new Date(now.getTime() - i * oneDayMs);
+      const year = targetDate.getFullYear();
+      const monthStr = String(targetDate.getMonth() + 1).padStart(2, "0");
+      const dayStr = String(targetDate.getDate()).padStart(2, "0");
+      const dateKey = `${year}-${monthStr}-${dayStr}`;
+
+      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const displayDate = `${monthNames[targetDate.getMonth()]} ${targetDate.getDate()}`;
+      const fullDisplayDate = `${monthNames[targetDate.getMonth()]} ${targetDate.getDate()}, ${year}`;
+
+      const dayEvents = events.filter((evt) => {
+        try {
+          const pubDate = new Date(evt.publishedAt);
+          const pYear = pubDate.getFullYear();
+          const pMonthStr = String(pubDate.getMonth() + 1).padStart(2, "0");
+          const pDayStr = String(pubDate.getDate()).padStart(2, "0");
+          return `${pYear}-${pMonthStr}-${pDayStr}` === dateKey;
+        } catch {
+          return false;
+        }
+      });
+
+      let dayBaseScore = 100;
+
+      dayEvents.forEach(evt => {
+        let incidentImpact = -5; // Base deduction per incident
+        
+        if (evt.severity === "critical") incidentImpact = -22;
+        else if (evt.severity === "high") incidentImpact = -14;
+        else if (evt.severity === "medium") incidentImpact = -8;
+        else if (evt.severity === "low") incidentImpact = -3;
+
+        const textToAnalyze = `${evt.title || ""} ${evt.summary || ""}`.toLowerCase();
+        
+        let positiveMatchCount = 0;
+        let negativeMatchCount = 0;
+
+        positiveWords.forEach(w => {
+          if (textToAnalyze.includes(w)) positiveMatchCount++;
+        });
+        negativeWords.forEach(w => {
+          if (textToAnalyze.includes(w)) negativeMatchCount++;
+        });
+
+        // Add resolution buffers or deepen concern based on keywords
+        incidentImpact += (positiveMatchCount * 3.5);
+        incidentImpact -= (negativeMatchCount * 4.5);
+
+        dayBaseScore += incidentImpact;
+      });
+
+      // Clamp score bounds elegantly
+      const finalScore = Math.max(12, Math.min(100, Math.round(dayBaseScore)));
+
+      let label = "Excellent";
+      let color = "#10B981"; // Emerald
+      if (finalScore >= 88) {
+        label = "Optimum Stability";
+        color = "#10B981";
+      } else if (finalScore >= 75) {
+        label = "Stable State";
+        color = "#34D399";
+      } else if (finalScore >= 55) {
+        label = "Moderate Risk";
+        color = "#F59E0B"; // Amber
+      } else if (finalScore >= 35) {
+        label = "Concerning Trends";
+        color = "#F97316"; // Orange
+      } else {
+        label = "Critical Hazard Level";
+        color = "#EF4444"; // Red
+      }
+
+      data.push({
+        dateStr: displayDate,
+        fullDate: fullDisplayDate,
+        score: finalScore,
+        count: dayEvents.length,
+        label,
+        color
+      });
+    }
+
+    return data;
+  }, [events]);
+
+  const sentimentStats = useMemo(() => {
+    if (sentimentData.length === 0) return { avgScore: 100, trendLabel: "Stable State", isImproving: true, diff: 0 };
+    
+    const totalScore = sentimentData.reduce((sum, item) => sum + item.score, 0);
+    const avgScore = Math.round(totalScore / sentimentData.length);
+
+    const firstHalfAvg = sentimentData.slice(0, 15).reduce((sum, item) => sum + item.score, 0) / 15;
+    const secondHalfAvg = sentimentData.slice(15).reduce((sum, item) => sum + item.score, 0) / 15;
+
+    const diff = secondHalfAvg - firstHalfAvg;
+    let trendLabel = "Stable State";
+    let isImproving = true;
+
+    if (diff > 1.5) {
+      trendLabel = "Improving Community Safety Sentiment";
+      isImproving = true;
+    } else if (diff < -1.5) {
+      trendLabel = "Declining Community Safety Sentiment";
+      isImproving = false;
+    } else {
+      trendLabel = "Holding Steady";
+      isImproving = secondHalfAvg >= firstHalfAvg;
+    }
+
+    return {
+      avgScore,
+      firstHalfAvg: Math.round(firstHalfAvg),
+      secondHalfAvg: Math.round(secondHalfAvg),
+      diff: Math.round(diff * 10) / 10,
+      trendLabel,
+      isImproving
+    };
+  }, [sentimentData]);
+
+  const SentimentTooltip = ({ active, payload }: any) => {
+    if (active && payload && payload.length) {
+      const data = payload[0].payload;
+      return (
+        <div className="bg-slate-900 border border-slate-800 p-2.5 rounded-lg shadow-xl text-white font-sans text-xs select-none">
+          <p className="font-bold text-slate-300 border-b border-slate-800 pb-1.5 mb-1.5 flex items-center gap-1">
+            <Calendar size={11} className="text-pink-400" /> {data.fullDate}
+          </p>
+          <div className="space-y-1.5 font-medium text-[11px]">
+            <div className="flex justify-between gap-6">
+              <span className="text-slate-400">Safety Index:</span>
+              <strong className="font-mono font-black animate-pulse" style={{ color: data.color }}>
+                {data.score} / 100
+              </strong>
+            </div>
+            <div className="flex justify-between gap-6">
+              <span className="text-slate-400">Status Vector:</span>
+              <span className="font-black uppercase px-1.5 py-0.5 rounded border text-[8.5px] leading-tight" style={{ borderColor: `${data.color}40`, backgroundColor: `${data.color}15`, color: data.color }}>
+                {data.label}
+              </span>
+            </div>
+            <div className="flex justify-between gap-6 border-t border-slate-800 pt-1.5 mt-1">
+              <span className="text-slate-500">Day's Volume:</span>
+              <strong className="font-mono text-slate-300">{data.count} event(s)</strong>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return null;
+  };
+
   const PieTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
       const data = payload[0].payload;
@@ -245,7 +468,7 @@ export default function TrendsPanel({ events }: TrendsPanelProps) {
     return null;
   };
 
-  // Rendering a custom Rechards tooltip for a highly polished feel
+  // Rendering a custom Recharts tooltip for a highly polished feel
   const CustomTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
       const data: DailyCount = payload[0].payload;
@@ -256,24 +479,40 @@ export default function TrendsPanel({ events }: TrendsPanelProps) {
           </p>
           <div className="space-y-1 font-medium text-[11px]">
             <div className="flex justify-between gap-6">
-              <span className="text-slate-400 flex items-center gap-1">
-                <span className="h-1.5 w-1.5 bg-blue-500 rounded-full"></span> Total Incidents:
+              <span className="text-slate-300 flex items-center gap-1">
+                <span className="h-1.5 w-1.5 bg-blue-500 rounded-full"></span> Total Volume:
               </span>
               <strong className="font-mono text-white">{data.total}</strong>
             </div>
             
-            <div className="flex justify-between gap-6">
-              <span className="text-slate-450 flex items-center gap-1">
-                <span className="h-1.5 w-1.5 bg-red-500 rounded-full"></span> Severe (Crit/High):
-              </span>
-              <strong className="font-mono text-red-400">{data.criticalHigh}</strong>
-            </div>
+            <div className="border-t border-slate-800 my-1 pt-1 space-y-1">
+              <div className="flex justify-between gap-6">
+                <span className="text-red-400 flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 bg-[#EF4444] rounded-full"></span> Critical:
+                </span>
+                <strong className="font-mono text-red-400">{data.critical}</strong>
+              </div>
 
-            <div className="flex justify-between gap-6">
-              <span className="text-slate-450 flex items-center gap-1">
-                <span className="h-1.5 w-1.5 bg-slate-400 rounded-full"></span> Minor / Moderate:
-              </span>
-              <strong className="font-mono text-slate-350">{data.mediumLow}</strong>
+              <div className="flex justify-between gap-6">
+                <span className="text-orange-405 flex items-center gap-1 font-medium">
+                  <span className="h-1.5 w-1.5 bg-[#F97316] rounded-full"></span> High:
+                </span>
+                <strong className="font-mono text-orange-400">{data.high}</strong>
+              </div>
+
+              <div className="flex justify-between gap-6">
+                <span className="text-amber-405 flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 bg-[#F59E0B] rounded-full"></span> Medium:
+                </span>
+                <strong className="font-mono text-amber-400">{data.medium}</strong>
+              </div>
+
+              <div className="flex justify-between gap-6">
+                <span className="text-emerald-405 flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 bg-[#10B981] rounded-full"></span> Low:
+                </span>
+                <strong className="font-mono text-emerald-400">{data.low}</strong>
+              </div>
             </div>
           </div>
         </div>
@@ -523,8 +762,8 @@ export default function TrendsPanel({ events }: TrendsPanelProps) {
                       />
                       <Line 
                         type="monotone" 
-                        name="Severe Alerts"
-                        dataKey="criticalHigh" 
+                        name="Critical"
+                        dataKey="critical" 
                         stroke="#EF4444" 
                         strokeWidth={2}
                         dot={false}
@@ -532,9 +771,27 @@ export default function TrendsPanel({ events }: TrendsPanelProps) {
                       />
                       <Line 
                         type="monotone" 
-                        name="Minor Alerts"
-                        dataKey="mediumLow" 
-                        stroke="#94A3B8" 
+                        name="High"
+                        dataKey="high" 
+                        stroke="#F97316" 
+                        strokeWidth={2}
+                        dot={false}
+                        activeDot={{ r: 4 }}
+                      />
+                      <Line 
+                        type="monotone" 
+                        name="Medium"
+                        dataKey="medium" 
+                        stroke="#F59E0B" 
+                        strokeWidth={1.5}
+                        dot={false}
+                        activeDot={{ r: 4 }}
+                      />
+                      <Line 
+                        type="monotone" 
+                        name="Low"
+                        dataKey="low" 
+                        stroke="#10B981" 
                         strokeWidth={1.5}
                         dot={false}
                         activeDot={{ r: 4 }}
@@ -622,6 +879,217 @@ export default function TrendsPanel({ events }: TrendsPanelProps) {
                     })}
                   </div>
 
+                </div>
+              )}
+            </div>
+
+            {/* Incident Type Breakdown Donut Chart */}
+            <div id="recharts-type-pie-container" className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 shadow-inner">
+              <div className="flex items-center justify-between mb-3 border-b border-slate-200/60 pb-2 select-none">
+                <span className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500 flex items-center gap-1">
+                  <Activity size={12} className="text-indigo-505 shrink-0" /> Incident Distribution by Raw Type
+                </span>
+                <span className="text-[8.5px] font-mono text-slate-400 font-bold uppercase">
+                  Granular Classifications
+                </span>
+              </div>
+
+              {eventTypeData.length === 0 ? (
+                <div className="text-center py-8 text-xs text-slate-400 font-semibold select-none bg-white rounded-lg border border-slate-150 p-4">
+                  <AlertCircle size={20} className="mx-auto text-slate-300 mb-1.5" />
+                  No specific type data available under current filters
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-center">
+                  
+                  {/* Donut Chart Visual Stage */}
+                  <div className="sm:col-span-5 h-[160px] flex items-center justify-center relative">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={eventTypeData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={48}
+                          outerRadius={68}
+                          paddingAngle={3}
+                          dataKey="value"
+                        >
+                          {eventTypeData.map((entry, idx) => (
+                            <Cell key={`type-cell-${idx}`} fill={TYPE_COLORS[idx % TYPE_COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip content={<PieTooltip />} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                    
+                    {/* Visual center label inside the donut gap */}
+                    <div className="absolute flex flex-col items-center justify-center text-center select-none pointer-events-none">
+                      <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider leading-none">Types</span>
+                      <span className="text-base font-black text-slate-800 font-mono leading-none mt-1">{totalEventTypeIncidents}</span>
+                    </div>
+                  </div>
+
+                  {/* Dynamic Ledger checklist legend list */}
+                  <div className="sm:col-span-7 space-y-1.5 select-none">
+                    {eventTypeData.map((item, idx) => {
+                      const pct = totalEventTypeIncidents > 0 
+                        ? Math.round((item.value / totalEventTypeIncidents) * 100) 
+                        : 0;
+                      const color = TYPE_COLORS[idx % TYPE_COLORS.length];
+
+                      return (
+                        <div 
+                          key={item.name} 
+                          id={`type-legend-row-${item.name.toLowerCase().replace(/ /g, "-")}`}
+                          className="flex items-center justify-between text-[11px] p-2 rounded-lg border border-slate-200/40 bg-white shadow-sm hover:bg-slate-50 transition-colors"
+                        >
+                          <div className="flex items-center gap-2 overflow-hidden">
+                            <span 
+                              className="h-2 w-2 rounded-full shrink-0" 
+                              style={{ backgroundColor: color }}
+                            />
+                            <span className="font-extrabold text-slate-700 truncate">{item.name}</span>
+                          </div>
+                          <div className="flex items-center gap-2 font-mono text-[10px] shrink-0 pl-1">
+                            <span className="font-black text-slate-800">{item.value}</span>
+                            <span className="text-slate-350">|</span>
+                            <span className="font-bold text-indigo-600">{pct}%</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                </div>
+              )}
+            </div>
+
+            {/* Daily Community Safety Sentiment Trajectory */}
+            <div id="recharts-sentiment-container" className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 shadow-inner">
+              <div className="flex items-center justify-between mb-3 border-b border-slate-200/60 pb-2 select-none">
+                <span className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500 flex items-center gap-1">
+                  <HeartHandshake size={12} className="text-pink-500 shrink-0" /> Community Safety Sentiment Trajectory
+                </span>
+                <span className="text-[8.5px] font-mono text-slate-400 font-bold uppercase">
+                  Lexical Intent Score
+                </span>
+              </div>
+
+              {sentimentData.length === 0 ? (
+                <div className="text-center py-8 text-xs text-slate-400 font-semibold select-none bg-white rounded-lg border border-slate-150 p-4">
+                  <AlertCircle size={20} className="mx-auto text-slate-300 mb-1.5" />
+                  No text sentiment parameters available for current filter set
+                </div>
+              ) : (
+                <div className="space-y-3.5">
+                  {/* Aggregated Sentiment Overview Widgets */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 select-none">
+                    
+                    <div className="bg-white border border-slate-200/60 rounded-lg p-2.5 shadow-sm text-center flex flex-col justify-center">
+                      <span className="block text-[8px] font-mono font-extrabold uppercase text-slate-400">Average Safety Index</span>
+                      <div className="flex items-center justify-center gap-1.5 mt-1">
+                        {sentimentStats.avgScore >= 75 ? (
+                          <Smile size={14} className="text-emerald-505 shrink-0" />
+                        ) : (
+                          <Frown size={14} className="text-amber-505 shrink-0" />
+                        )}
+                        <span className="text-sm font-black text-slate-800 font-mono leading-none border-b border-dashed border-slate-245/80">
+                          {sentimentStats.avgScore} <span className="text-[9px] text-slate-400 font-normal">/100</span>
+                        </span>
+                      </div>
+                      <span className="block text-[8px] text-slate-400 font-bold mt-1 uppercase">
+                        {sentimentStats.avgScore >= 80 ? "Optimal Order" : sentimentStats.avgScore >= 60 ? "Moderate State" : "Active Risks"}
+                      </span>
+                    </div>
+
+                    <div className="bg-white border border-slate-200/60 rounded-lg p-2.5 shadow-sm text-center flex flex-col justify-center">
+                      <span className="block text-[8px] font-mono font-extrabold uppercase text-slate-400">Sentiment Dynamic</span>
+                      <div className="flex items-center justify-center gap-1 mt-1 font-mono font-black text-xs">
+                        {sentimentStats.diff > 0 ? (
+                          <div className="text-emerald-600 flex items-center gap-0.5">
+                            <TrendingUp size={12} className="shrink-0" />
+                            <span>+{sentimentStats.diff} pts</span>
+                          </div>
+                        ) : sentimentStats.diff < 0 ? (
+                          <div className="text-red-500 flex items-center gap-0.5">
+                            <TrendingDown size={12} className="shrink-0" />
+                            <span>{sentimentStats.diff} pts</span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-500">STABLE (0)</span>
+                        )}
+                      </div>
+                      <span className="block text-[8px] text-slate-400 font-bold mt-1 uppercase">
+                        Velocity Delta
+                      </span>
+                    </div>
+
+                    <div className="bg-white border border-slate-200/60 rounded-lg p-2.5 shadow-sm text-center flex flex-col justify-center sm:col-span-1">
+                      <span className="block text-[8px] font-mono font-extrabold uppercase text-slate-400">Current Vector</span>
+                      <span className="block mt-1 text-[10px] font-black text-pink-650 tracking-tight truncate px-1">
+                        {sentimentStats.trendLabel.toUpperCase()}
+                      </span>
+                      <span className="block text-[8px] text-slate-400 font-bold mt-1 uppercase">
+                        Trajectory Profile
+                      </span>
+                    </div>
+
+                  </div>
+
+                  {/* Sentiment Area Line Chart */}
+                  <div className="w-full h-[160px] text-[10px] font-mono bg-white border border-slate-200/60 p-2 rounded-lg shadow-sm">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart
+                        data={sentimentData}
+                        margin={{ top: 5, right: 10, left: -25, bottom: 0 }}
+                      >
+                        <defs>
+                          <linearGradient id="colorSentiment" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#EC4899" stopOpacity={0.18}/>
+                            <stop offset="95%" stopColor="#EC4899" stopOpacity={0.0}/>
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
+                        <XAxis 
+                          dataKey="dateStr" 
+                          tickLine={false} 
+                          axisLine={{ stroke: "#E2E8F0" }} 
+                          stroke="#64748B" 
+                          dy={6}
+                          minTickGap={15}
+                        />
+                        <YAxis 
+                          tickLine={false} 
+                          axisLine={false} 
+                          stroke="#64748B" 
+                          domain={[10, 100]}
+                          allowDecimals={false}
+                        />
+                        <Tooltip content={<SentimentTooltip />} />
+                        <Area 
+                          type="monotone" 
+                          dataKey="score" 
+                          stroke="#EC4899" 
+                          strokeWidth={2} 
+                          fillOpacity={1} 
+                          fill="url(#colorSentiment)" 
+                          activeDot={{ r: 4, strokeWidth: 0, fill: "#EC4899" }}
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* Context explanatory line */}
+                  <div className="bg-pink-50/50 border border-pink-100 p-2.5 rounded-lg text-[10px] text-pink-950 font-medium select-none space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold uppercase text-pink-900 tracking-wider">
+                      <ShieldCheck size={12} className="shrink-0 text-pink-600" />
+                      How safety sentiment is parameterized:
+                    </div>
+                    <p className="text-slate-600 leading-relaxed font-sans mt-0.5 font-medium">
+                      Daily baseline indices start at 100 representing perfect baseline safety. Reports reduce indices based on severity weightings and intensive content search tags (e.g. violent words yield greater decreases; resolution and secure tags cushion impact). Days with steady, quiet profiles preserve max stability.
+                    </p>
+                  </div>
                 </div>
               )}
             </div>

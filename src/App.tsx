@@ -1,6 +1,7 @@
-import React, { useEffect, useState, useMemo } from "react";
-import { AlertCircle, ShieldAlert, Sparkles, X, ChevronRight, HelpCircle, Navigation, Info, ExternalLink, Bookmark, TrendingUp, Upload, Download, BarChart3, Wifi, WifiOff, MessageSquare, MapPin, ArrowLeftRight } from "lucide-react";
-import { EventItem, EventSource } from "./types";
+import React, { useEffect, useState, useMemo, useRef } from "react";
+import { motion, AnimatePresence } from "motion/react";
+import { AlertCircle, ShieldAlert, Sparkles, X, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, HelpCircle, Navigation, Info, ExternalLink, Bookmark, TrendingUp, Upload, Download, BarChart3, Wifi, WifiOff, MessageSquare, MapPin, ArrowLeftRight, Flame, Plus, Minus, Settings, Filter, Layers, Clock, Minimize2, Maximize2, Bell } from "lucide-react";
+import { EventItem, EventSource, SeverityType } from "./types";
 import EventFilters, { FilterState } from "./components/EventFilters";
 import IncidentMap from "./components/IncidentMap";
 import EventDrawer from "./components/EventDrawer";
@@ -17,6 +18,8 @@ import RegionalMetricsModal from "./components/RegionalMetricsModal";
 import SafetyChatbot from "./components/SafetyChatbot";
 import PrintableIncidentReport from "./components/PrintableIncidentReport";
 import CompareIncidentsPanel from "./components/CompareIncidentsPanel";
+import HotspotProjectionPanel from "./components/HotspotProjectionPanel";
+import AlertZonesPanel from "./components/AlertZonesPanel";
 
 export default function App() {
   // Application Data States
@@ -50,13 +53,41 @@ export default function App() {
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
 
   // Toggle States & App Controls
-  const [sidebarTab, setSidebarTab] = useState<"list" | "summary" | "trends" | "risk" | "upload_news" | "bookmarks" | "chat">("list");
+  const [sidebarTab, setSidebarTab] = useState<"list" | "summary" | "trends" | "risk" | "upload_news" | "bookmarks" | "chat" | "projection" | "zones">("list");
   const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(null);
   const [isIngesting, setIsIngesting] = useState<boolean>(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState<boolean>(false);
   const [isMetricsModalOpen, setIsMetricsModalOpen] = useState<boolean>(false);
   const [showHeatmap, setShowHeatmap] = useState<boolean>(false);
+  const [showPins, setShowPins] = useState<boolean>(true);
+  const [useWebGLHeatmap, setUseWebGLHeatmap] = useState<boolean>(true);
   const [heatmapOpacity, setHeatmapOpacity] = useState<number>(0.18);
+  const [heatmapRadiusMultiplier, setHeatmapRadiusMultiplier] = useState<number>(1.0);
+
+  // Lifted Custom Safety Zones & Pins State
+  const [customPins, setCustomPins] = useState<Array<{
+    id: string;
+    latitude: number;
+    longitude: number;
+    title: string;
+    note: string;
+    severity: SeverityType;
+    createdAt: string;
+    isAlertZone?: boolean;
+    zoneType?: 'home' | 'apartment' | 'hospital' | 'travel_route' | 'custom';
+    alertRadiusMeters?: number;
+  }>>(() => {
+    try {
+      const saved = localStorage.getItem("saskatoon_custom_pins");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem("saskatoon_custom_pins", JSON.stringify(customPins));
+  }, [customPins]);
 
   const handleToggleHeatmapOpacity = () => {
     // Opacity cycles through 0.06 (Low), 0.18 (Medium), 0.35 (High)
@@ -70,17 +101,325 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState<string | null>(null);
 
+  // Map Base Style Selection ("dark" | "streets" | "satellite"), backed by localStorage
+  const [mapStyle, setMapStyle] = useState<"dark" | "streets" | "satellite">(() => {
+    try {
+      const saved = localStorage.getItem("saskatoon_map_style");
+      return (saved === "streets" || saved === "satellite" || saved === "dark") ? saved as any : "dark";
+    } catch {
+      return "dark";
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("saskatoon_map_style", mapStyle);
+    } catch {}
+  }, [mapStyle]);
+
+  // Real-time map status overlays inside #map-container
+  const [mapZoom, setMapZoom] = useState<number>(12);
+  const [mapCenterCoords, setMapCenterCoords] = useState<{ lat: number; lng: number }>({ lat: 52.1332, lng: -106.67 });
+
+  // Layout Dynamic Adjustable Size States
+  const [isAdjustmentPanelOpen, setIsAdjustmentPanelOpen] = useState<boolean>(false);
+  const [sizes, setSizes] = useState<Record<string, { isMinimized: boolean; isEnlarged: boolean }>>({
+    header: { isMinimized: false, isEnlarged: false },
+    disclaimer: { isMinimized: false, isEnlarged: false },
+    sidebar: { isMinimized: false, isEnlarged: false },
+    filters: { isMinimized: false, isEnlarged: false },
+    sidebarTabs: { isMinimized: false, isEnlarged: false },
+    map: { isMinimized: false, isEnlarged: false },
+    timeline: { isMinimized: false, isEnlarged: false },
+    legend: { isMinimized: false, isEnlarged: false },
+    drawer: { isMinimized: false, isEnlarged: false },
+  });
+
+  const toggleSizing = (componentKey: string, action: "minimize" | "normal" | "enlarge") => {
+    setSizes(prev => {
+      const current = prev[componentKey] || { isMinimized: false, isEnlarged: false };
+      let updated = { ...current };
+      if (action === "minimize") {
+        updated = { isMinimized: !current.isMinimized, isEnlarged: false };
+      } else if (action === "enlarge") {
+        updated = { isMinimized: false, isEnlarged: !current.isEnlarged };
+      } else {
+        updated = { isMinimized: false, isEnlarged: false };
+      }
+      const next = { ...prev, [componentKey]: updated };
+      try {
+        localStorage.setItem("saskatchewan_ui_sizes_v2", JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("saskatchewan_ui_sizes_v2");
+      if (saved) {
+        setSizes(JSON.parse(saved));
+      }
+    } catch {}
+  }, []);
+
+  // Refs for tracking width calculations
+  const sidebarContainerRef = useRef<HTMLDivElement>(null);
+
+  // Dragging interaction states
+  const [isDraggingSidebar, setIsDraggingSidebar] = useState<boolean>(false);
+  const [isDraggingSplit, setIsDraggingSplit] = useState<boolean>(false);
+  const [isDraggingDrawer, setIsDraggingDrawer] = useState<boolean>(false);
+  const [isDraggingTimeline, setIsDraggingTimeline] = useState<boolean>(false);
+
+  // Refs for drag vs click separation and relative movement
+  const dragStartMousePos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const dragStartY = useRef<number>(0);
+  const dragStartHeight = useRef<number>(0);
+
+  // Resizable dimension states (with local storage caching)
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem("saskatchewan_sidebar_width");
+      return saved ? parseInt(saved, 10) : 350;
+    } catch {
+      return 350;
+    }
+  });
+
+  const [filtersHeightPercent, setFiltersHeightPercent] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem("saskatchewan_filters_height_percent");
+      return saved ? parseInt(saved, 10) : 50;
+    } catch {
+      return 50;
+    }
+  });
+
+  const [drawerWidth, setDrawerWidth] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem("saskatchewan_drawer_width");
+      return saved ? parseInt(saved, 10) : 380;
+    } catch {
+      return 380;
+    }
+  });
+
+  // Additional range-adjustable layout states
+  const [headerScale, setHeaderScale] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem("saskatchewan_header_scale");
+      return saved ? parseFloat(saved) : 1.0;
+    } catch {
+      return 1.0;
+    }
+  });
+
+  const [disclaimerScale, setDisclaimerScale] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem("saskatchewan_disclaimer_scale");
+      return saved ? parseFloat(saved) : 1.0;
+    } catch {
+      return 1.0;
+    }
+  });
+
+  const [timelineHeight, setTimelineHeight] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem("saskatchewan_timeline_height");
+      return saved ? parseInt(saved, 10) : 140;
+    } catch {
+      return 140;
+    }
+  });
+
+  const [mapOpacity, setMapOpacity] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem("saskatchewan_map_opacity");
+      return saved ? parseInt(saved, 10) : 100;
+    } catch {
+      return 100;
+    }
+  });
+
+  const [legendScale, setLegendScale] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem("saskatchewan_legend_scale");
+      return saved ? parseFloat(saved) : 1.0;
+    } catch {
+      return 1.0;
+    }
+  });
+
+  const isSidebarCollapsed = !!sizes.sidebar?.isMinimized || sidebarWidth < 40;
+  const isDrawerCollapsed = !!sizes.drawer?.isMinimized || drawerWidth < 40;
+  const isTimelineCollapsed = timelineHeight < 40;
+
+  // Event handlers to activate resize dragging
+  const handleSidebarResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDraggingSidebar(true);
+    dragStartMousePos.current = { x: e.clientX, y: e.clientY };
+  };
+
+  const handleSplitResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDraggingSplit(true);
+  };
+
+  const handleDrawerResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDraggingDrawer(true);
+    dragStartMousePos.current = { x: e.clientX, y: e.clientY };
+  };
+
+  const handleTimelineResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDraggingTimeline(true);
+    dragStartMousePos.current = { x: e.clientX, y: e.clientY };
+    dragStartY.current = e.clientY;
+    dragStartHeight.current = timelineHeight;
+  };
+
+  // Direct mouse move + release listener on window viewport
+  useEffect(() => {
+    if (!isDraggingSidebar && !isDraggingSplit && !isDraggingDrawer && !isDraggingTimeline) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isDraggingSidebar) {
+        const newWidth = Math.min(Math.max(e.clientX, 0), window.innerWidth - 300);
+        setSidebarWidth(newWidth < 40 ? 0 : newWidth);
+      } else if (isDraggingDrawer) {
+        const newWidth = Math.min(Math.max(window.innerWidth - e.clientX, 0), window.innerWidth - 300);
+        setDrawerWidth(newWidth < 40 ? 0 : newWidth);
+      } else if (isDraggingTimeline) {
+        const deltaY = e.clientY - dragStartY.current;
+        const newHeight = Math.min(Math.max(dragStartHeight.current - deltaY, 0), window.innerHeight - 200);
+        setTimelineHeight(newHeight < 40 ? 0 : newHeight);
+      } else if (isDraggingSplit) {
+        if (sidebarContainerRef.current) {
+          const rect = sidebarContainerRef.current.getBoundingClientRect();
+          const relativeY = e.clientY - rect.top;
+          const newPercent = Math.min(Math.max((relativeY / rect.height) * 100, 15), 85);
+          setFiltersHeightPercent(newPercent);
+        }
+      }
+    };
+
+    const handleMouseUp = (e: MouseEvent) => {
+      const dx = Math.abs(e.clientX - dragStartMousePos.current.x);
+      const dy = Math.abs(e.clientY - dragStartMousePos.current.y);
+      const isClick = dx < 4 && dy < 4;
+
+      if (isClick) {
+        if (isDraggingSidebar) {
+          setSidebarWidth(prev => {
+            if (prev > 40) {
+              localStorage.setItem("saskatchewan_sidebar_last_width", String(prev));
+              return 0;
+            } else {
+              const last = parseInt(localStorage.getItem("saskatchewan_sidebar_last_width") || "350", 10);
+              return last;
+            }
+          });
+        } else if (isDraggingDrawer) {
+          setDrawerWidth(prev => {
+            if (prev > 40) {
+              localStorage.setItem("saskatchewan_drawer_last_width", String(prev));
+              return 0;
+            } else {
+              const last = parseInt(localStorage.getItem("saskatchewan_drawer_last_width") || "380", 10);
+              return last;
+            }
+          });
+        } else if (isDraggingTimeline) {
+          setTimelineHeight(prev => {
+            if (prev > 40) {
+              localStorage.setItem("saskatchewan_timeline_last_height", String(prev));
+              return 0;
+            } else {
+              const last = parseInt(localStorage.getItem("saskatchewan_timeline_last_height") || "140", 10);
+              return last;
+            }
+          });
+        }
+      }
+
+      setIsDraggingSidebar(false);
+      setIsDraggingSplit(false);
+      setIsDraggingDrawer(false);
+      setIsDraggingTimeline(false);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isDraggingSidebar, isDraggingSplit, isDraggingDrawer, isDraggingTimeline]);
+
+  // Sync state modifications onto disk cache automatically
+  useEffect(() => {
+    try {
+      localStorage.setItem("saskatchewan_sidebar_width", String(sidebarWidth));
+    } catch {}
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("saskatchewan_filters_height_percent", String(filtersHeightPercent));
+    } catch {}
+  }, [filtersHeightPercent]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("saskatchewan_drawer_width", String(drawerWidth));
+    } catch {}
+  }, [drawerWidth]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("saskatchewan_header_scale", String(headerScale));
+    } catch {}
+  }, [headerScale]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("saskatchewan_disclaimer_scale", String(disclaimerScale));
+    } catch {}
+  }, [disclaimerScale]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("saskatchewan_timeline_height", String(timelineHeight));
+    } catch {}
+  }, [timelineHeight]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("saskatchewan_map_opacity", String(mapOpacity));
+    } catch {}
+  }, [mapOpacity]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("saskatchewan_legend_scale", String(legendScale));
+    } catch {}
+  }, [legendScale]);
+
   // Filters State
   const [filters, setFilters] = useState<FilterState>({
     timeRangeHours: "all",
     severities: ["critical", "high", "medium", "low"],
-    eventType: "all",
+    eventTypes: [], // empty means all categories are shown
     sourceKey: "all",
     searchQuery: "",
     showBookmarksOnly: false,
     searchRadiusKm: "all",
     userLat: null,
     userLng: null,
+    criticalOnly: false,
   });
 
   // Saskatchewan Regional Cities & Major Hubs configuration
@@ -120,6 +459,8 @@ export default function App() {
     return match ? match.coords : [52.9399, -106.4509] as [number, number];
   }, [selectedCity, SASKATCHEWAN_CITIES]);
 
+  const retryCount = React.useRef(0);
+
   // 1. Fetch initial seeds & active sources on load
   const loadData = async () => {
     try {
@@ -133,16 +474,33 @@ export default function App() {
         throw new Error("Failed to receive structured updates from local Express api.");
       }
 
-      const eventsData = await eventsRes.json();
+      let eventsData = await eventsRes.json();
       const sourcesData = await sourcesRes.json();
 
-      setEvents(eventsData);
+      // Handle offline/fallback JSON response from Service Worker gracefully
+      if (eventsData && !Array.isArray(eventsData) && Array.isArray((eventsData as any).events)) {
+        eventsData = (eventsData as any).events;
+      }
+
+      if (Array.isArray(eventsData)) {
+        setEvents(eventsData);
+        retryCount.current = 0; // successfully loaded
+      } else {
+        throw new Error("Received invalid, non-array event data structure.");
+      }
+
       setSources(sourcesData);
     } catch (err: any) {
-      console.error("Failed to load initial Saskatoon safety data:", err);
-      setErrorMessage("Safety database is loading or starting. Retrying connection...");
-      // Graceful local fetch retry after 3 seconds to handle server spin-up latency
-      setTimeout(loadData, 3000);
+      retryCount.current += 1;
+      // Only log a hard error after 5 failed attempts (~10 seconds) to prevent false-positive console error triggers
+      if (retryCount.current >= 5) {
+        console.error("Failed to load initial Saskatoon safety data after 5 attempts:", err);
+        setErrorMessage("Could not connect to the safety database. Please try refreshing properties.");
+      } else {
+        console.warn(`Connection retry #${retryCount.current} to safety database...`);
+        setErrorMessage("Safety database is loading or starting. Retrying connection...");
+        setTimeout(loadData, 2000);
+      }
     }
   };
 
@@ -634,13 +992,18 @@ export default function App() {
         return false;
       }
 
+      // Critical Only mode check
+      if (filters.criticalOnly && evt.severity !== "critical") {
+        return false;
+      }
+
       // Severity classification match check
       if (filters.severities && !filters.severities.includes(evt.severity)) {
         return false;
       }
 
       // Incident category type match check
-      if (filters.eventType !== "all" && evt.eventType !== filters.eventType) {
+      if (filters.eventTypes && filters.eventTypes.length > 0 && !filters.eventTypes.includes(evt.eventType)) {
         return false;
       }
 
@@ -753,426 +1116,796 @@ export default function App() {
   return (
     <div className="h-screen w-full select-none flex flex-col bg-[#F8FAFC] text-slate-900 font-sans overflow-hidden">
       
+      {/* Dynamic Cursor Drag Backdrop Cover Mask prevents Map / IFrame interaction captures */}
+      {(isDraggingSidebar || isDraggingSplit || isDraggingDrawer) && (
+        <div 
+          className="fixed inset-0 z-[9999] select-none text-[0px]" 
+          style={{ 
+            cursor: isDraggingSplit ? "row-resize" : "col-resize",
+            pointerEvents: "auto",
+            background: "transparent"
+          }}
+        >
+          Drag Active
+        </div>
+      )}
+      
       {/* Top Banner Warning Disclaimer & Header */}
-      <header className="p-4 border-b border-slate-750 bg-slate-900 text-white flex flex-col gap-3 shrink-0 shadow-sm print-hidden">
+      <header 
+        style={{
+          padding: `${(sizes.header?.isMinimized ? 8 : (sizes.header?.isEnlarged ? 24 : 16)) * headerScale}px`,
+          gap: `${(sizes.header?.isMinimized ? 6 : (sizes.header?.isEnlarged ? 16 : 12)) * headerScale}px`
+        }}
+        className="border-b border-slate-750 bg-slate-900 text-white flex flex-col shrink-0 shadow-sm print-hidden transition-all duration-300"
+      >
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-600 border border-blue-500 text-white rounded relative shadow-sm animate-pulse">
-              <ShieldAlert size={20} />
+            <div 
+              style={{
+                padding: `${(sizes.header?.isMinimized ? 6 : 8) * headerScale}px`
+              }}
+              className="bg-blue-600 border border-blue-500 text-white rounded relative shadow-sm animate-pulse transition-all"
+            >
+              <ShieldAlert size={(sizes.header?.isMinimized ? 16 : 20) * headerScale} />
               <div className="absolute top-0 right-0 h-1.5 w-1.5 rounded-full bg-emerald-400 ring-1 ring-slate-900"></div>
             </div>
             <div>
-              <h1 className="text-base font-bold font-sans tracking-tight text-white flex flex-wrap items-center gap-2 uppercase">
+              <h1 
+                style={{
+                  fontSize: `${(sizes.header?.isEnlarged ? 20 : 16) * headerScale}px`,
+                  gap: `${8 * headerScale}px`
+                }}
+                className="font-bold font-sans tracking-tight text-white flex flex-wrap items-center uppercase transition-all"
+              >
                 <span>Saskatchewan Safety Map</span>
-                <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-blue-400 font-mono tracking-wider font-semibold shrink-0">
+                <span 
+                  style={{
+                    fontSize: `${10 * headerScale}px`,
+                    padding: `${2 * headerScale}px ${6 * headerScale}px`
+                  }}
+                  className="bg-slate-800 rounded text-blue-400 font-mono tracking-wider font-semibold shrink-0"
+                >
                   PROVINCIAL WATCH
                 </span>
-                
-                {/* Connection check pill */}
-                {isOnline ? (
-                  <span className="text-[9.5px] bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 px-2 py-0.5 rounded-full font-mono font-bold tracking-wider flex items-center gap-1.5 normal-case shrink-0 shadow-sm">
-                    <Wifi size={10} className="text-emerald-400 animate-pulse" />
-                    <span className="flex items-center gap-1">Online <span className="text-[8.5px] text-emerald-500">(Cached Live Sys)</span></span>
-                  </span>
-                ) : (
-                  <span className="text-[9.5px] bg-amber-500/15 border border-amber-500/40 text-amber-400 px-2 py-0.5 rounded-full font-mono font-bold tracking-wider flex items-center gap-1.5 normal-case shrink-0 shadow-sm animate-bounce">
-                    <WifiOff size={10} className="text-amber-400" />
-                    <span>Saskatchewan Cache Active</span>
-                  </span>
-                )}
               </h1>
-              <p className="text-[11px] text-slate-300">
-                Private Saskatoon & Saskatchewan community safety watch and geocoded hazard monitor.
-              </p>
+              {!sizes.header?.isMinimized && (
+                <div className="flex flex-wrap items-center gap-2.5 mt-1 transition-all">
+                  {/* Connection check pill */}
+                  {isOnline ? (
+                    <span 
+                      style={{
+                        fontSize: `${9.5 * headerScale}px`,
+                        padding: `${2 * headerScale}px ${8 * headerScale}px`
+                      }}
+                      className="bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 rounded-full font-mono font-bold tracking-wider flex items-center gap-1.5 normal-case shrink-0 shadow-sm"
+                    >
+                      <Wifi size={11 * headerScale} className="text-emerald-400 animate-pulse" />
+                      <span className="flex items-center gap-1">Online <span style={{ fontSize: `${8.5 * headerScale}px` }} className="text-emerald-500">(Cached Live Sys)</span></span>
+                    </span>
+                  ) : (
+                    <span 
+                      style={{
+                        fontSize: `${9.5 * headerScale}px`,
+                        padding: `${2 * headerScale}px ${8 * headerScale}px`
+                      }}
+                      className="bg-amber-500/15 border border-amber-500/40 text-amber-400 rounded-full font-mono font-bold tracking-wider flex items-center gap-1.5 normal-case shrink-0 shadow-sm animate-bounce"
+                    >
+                      <WifiOff size={11 * headerScale} className="text-amber-400" />
+                      <span>Saskatchewan Cache Active</span>
+                    </span>
+                  )}
+                  <p 
+                    style={{
+                      fontSize: `${(sizes.header?.isEnlarged ? 12 : 11) * headerScale}px`
+                    }}
+                    className="text-slate-300 transition-all font-medium"
+                  >
+                    Private Saskatoon & Saskatchewan community safety watch and geocoded hazard monitor.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
-          <div className="flex gap-2.5 flex-wrap items-center">
-            {/* Saskatchewan Regional Hubs Selector */}
-            <div className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded px-3 py-1.5 focus-within:ring-1 focus-within:ring-blue-500 transition-shadow">
-              <MapPin size={13} className="text-blue-400 shrink-0" />
-              <label htmlFor="city-selector-dropdown" className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono select-none">
-                Regional Hub:
-              </label>
-              <select
-                id="city-selector-dropdown"
-                value={selectedCity}
-                onChange={(e) => handleCityChange(e.target.value)}
-                className="bg-transparent text-white font-sans text-xs font-semibold focus:outline-none cursor-pointer pr-1 outline-none border-none ring-0 select-none [&>option]:bg-slate-900"
+          <div className="flex flex-col items-start md:items-end gap-2 shrink-0">
+            <div 
+              style={{
+                gap: `${10 * headerScale}px`
+              }}
+              className="flex flex-wrap items-center"
+            >
+              {/* Saskatchewan Regional Hubs Selector */}
+              <div 
+                style={{
+                  padding: `${(sizes.header?.isMinimized ? 4 : 6) * headerScale}px ${(sizes.header?.isMinimized ? 8 : 12) * headerScale}px`
+                }}
+                className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded focus-within:ring-1 focus-within:ring-blue-500 transition-all"
               >
-                {SASKATCHEWAN_CITIES.map((city) => (
-                  <option key={city.name} value={city.name}>
-                    {city.name}
-                  </option>
-                ))}
-              </select>
+                <MapPin size={13 * headerScale} className="text-blue-400 shrink-0" />
+                <label 
+                  style={{ fontSize: `${10 * headerScale}px` }}
+                  htmlFor="city-selector-dropdown" 
+                  className="uppercase font-bold tracking-wider text-slate-400 font-mono select-none"
+                >
+                  Regional Hub:
+                </label>
+                <select
+                  id="city-selector-dropdown"
+                  value={selectedCity}
+                  onChange={(e) => handleCityChange(e.target.value)}
+                  style={{ fontSize: `${12 * headerScale}px` }}
+                  className="bg-transparent text-white font-sans font-semibold focus:outline-none cursor-pointer pr-1 outline-none border-none ring-0 select-none [&>option]:bg-slate-900"
+                >
+                  {SASKATCHEWAN_CITIES.map((city) => (
+                    <option key={city.name} value={city.name}>
+                      {city.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Regional Safety Metrics button */}
+              <button
+                type="button"
+                id="regional-metrics-btn"
+                onClick={() => setIsMetricsModalOpen(true)}
+                style={{
+                  fontSize: `${12 * headerScale}px`,
+                  padding: `${(sizes.header?.isMinimized ? 4 : 8) * headerScale}px ${(sizes.header?.isMinimized ? 10 : 14) * headerScale}px`
+                }}
+                className="cursor-pointer bg-transparent hover:bg-slate-800 border border-slate-305 text-white font-semibold rounded flex items-center gap-1.5 transition-all shadow-sm font-sans"
+              >
+                <BarChart3 size={14 * headerScale} className="text-white" />
+                <span>Regional Safety Metrics</span>
+              </button>
+
+              {/* Quick help button */}
+              <button
+                onClick={() => setShowHelpGuide(true)}
+                style={{
+                  fontSize: `${12 * headerScale}px`,
+                  padding: `${(sizes.header?.isMinimized ? 4 : 8) * headerScale}px ${(sizes.header?.isMinimized ? 10 : 14) * headerScale}px`
+                }}
+                className="cursor-pointer bg-transparent hover:bg-slate-800 border border-slate-305 text-white font-semibold rounded flex items-center gap-1.5 transition-all"
+              >
+                <HelpCircle size={14 * headerScale} className="text-blue-400 border-none" />
+                <span>Safety Disclaimer</span>
+              </button>
+
+              {/* Layout Adjustments Sizing Dashboard button */}
+              <button
+                type="button"
+                id="layout-adjustments-sizing-btn"
+                onClick={() => setIsAdjustmentPanelOpen(!isAdjustmentPanelOpen)}
+                style={{
+                  fontSize: `${12 * headerScale}px`,
+                  padding: `${(sizes.header?.isMinimized ? 4 : 8) * headerScale}px ${(sizes.header?.isMinimized ? 10 : 14) * headerScale}px`
+                }}
+                className="cursor-pointer bg-transparent hover:bg-slate-800 border border-slate-305 text-white font-semibold rounded flex items-center gap-1.5 transition-all"
+              >
+                <Settings size={14 * headerScale} className="text-blue-400 shrink-0" />
+                <span>Sizing Dashboard</span>
+              </button>
             </div>
-
-            {/* Regional Safety Metrics button */}
-            <button
-              type="button"
-              id="regional-metrics-btn"
-              onClick={() => setIsMetricsModalOpen(true)}
-              className="cursor-pointer bg-blue-650 hover:bg-blue-600 border border-blue-550 text-white font-semibold text-xs px-3.5 py-2 rounded flex items-center gap-1.5 transition-colors shadow-sm font-sans"
-            >
-              <BarChart3 size={14} className="text-white" />
-              <span>Regional Safety Metrics</span>
-            </button>
-
-            {/* Quick help button */}
-            <button
-              onClick={() => setShowHelpGuide(true)}
-              className="cursor-pointer bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-100 font-semibold text-xs px-3.5 py-2 rounded flex items-center gap-1.5 transition-colors"
-            >
-              <HelpCircle size={14} className="text-blue-400" />
-              <span>Safety Disclaimer</span>
-            </button>
             
             {/* Display status */}
-            <div className="hidden lg:flex items-center gap-2 bg-slate-950/20 border border-slate-705 py-1.5 px-3 rounded text-[10px] font-mono select-none text-slate-400">
-              <span className="text-slate-500 text-[9px]">SYSTEM STATE:</span>
-              <span className="text-emerald-400 flex items-center gap-1 font-bold">
-                <span className="h-1.5 w-1.5 bg-emerald-400 rounded-full inline-block animate-ping"></span>
-                ACTIVE MONITORING
-              </span>
-            </div>
+            {!sizes.header?.isMinimized && (
+              <div 
+                style={{
+                  padding: `${5 * headerScale}px ${12 * headerScale}px`,
+                  fontSize: `${10 * headerScale}px`
+                }}
+                className="flex items-center gap-2 bg-slate-950/20 border border-slate-700/50 rounded font-mono select-none text-slate-405 md:mr-auto"
+              >
+                <span className="text-slate-500 text-[9px] font-bold">SYSTEM STATE:</span>
+                <span className="text-emerald-400 flex items-center gap-1 font-bold">
+                  <span className="h-1.5 w-1.5 bg-emerald-400 rounded-full inline-block animate-ping"></span>
+                  ACTIVE MONITORING
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Global Alert Disclaimer strip */}
-        <div className="bg-amber-50 border border-amber-200 text-amber-800 px-3.5 py-2.5 rounded-lg text-xs flex gap-3 leading-relaxed shadow-sm font-medium">
-          <AlertCircle size={16} className="text-amber-600 shrink-0 mt-0.5 animate-bounce" />
-          <span className="text-[11.5px] text-slate-700">
-            <strong className="font-bold uppercase tracking-widest text-[10px] font-mono mr-1.5 text-amber-800">Safety Notice:</strong>
-            Locations are approximate and delay-adjusted. This personal incident map is designed purely for community awareness only and should not be used for emergency situations, accusation decisions, suspect identifiers, or legal determinations.
-          </span>
-        </div>
+        {!sizes.disclaimer?.isMinimized && (
+          <div 
+            style={{
+              padding: `${(sizes.disclaimer?.isEnlarged ? 18 : 10) * disclaimerScale}px`,
+              fontSize: `${(sizes.disclaimer?.isEnlarged ? 12.5 : 11.5) * disclaimerScale}px`,
+              gap: `${12 * disclaimerScale}px`
+            }}
+            className="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg flex leading-relaxed shadow-sm font-medium transition-all duration-300"
+          >
+            <AlertCircle size={16 * disclaimerScale} className="text-amber-600 shrink-0 mt-0.5 animate-bounce" />
+            <span className="text-slate-700">
+              <strong className="font-bold uppercase tracking-widest font-mono mr-1.5 text-amber-800" style={{ fontSize: `${10 * disclaimerScale}px` }}>Safety Notice:</strong>
+              Locations are approximate and delay-adjusted. This personal incident map is designed purely for community awareness only and should not be used for emergency situations, accusation decisions, suspect identifiers, or legal determinations.
+            </span>
+          </div>
+        )}
       </header>
 
       {/* Main Full Stack Application Division */}
       <main className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
-        
-        {/* Left Workspace Panel: Sidebar Filters + Interactive Cards List */}
-        <div className="w-full md:w-85 md:min-w-85 border-r border-slate-200 flex flex-col h-full bg-white shrink-0 print-hidden">
-          <div className="flex-1 flex flex-col overflow-hidden">
-            {/* Renders Filter selections */}
-            <EventFilters
-              filters={filters}
-              onChange={setFilters}
-              availableTypes={availableTypes}
-              availableSources={availableSources}
-              onIngest={handleIngestFeeds}
-              isIngesting={isIngesting}
-              onOpenReportModal={() => setIsReportModalOpen(true)}
-              totalCount={events.length}
-              filteredCount={filteredEvents.length}
-              autoRefreshEnabled={autoRefreshEnabled}
-              onToggleAutoRefresh={handleToggleAutoRefresh}
-              nextRefreshMinutesLeft={nextRefreshMinutesLeft}
-              filteredEvents={filteredEvents}
-              isAlertScannerActive={isAlertScannerActive}
-              onToggleAlertScanner={handleToggleAlertScanner}
-              lastAlertScanTime={lastAlertScanTime}
-              onTriggerManualScan={runProximityAlertScan}
-              onClearAlertHistory={handleClearAlertHistory}
-              alertedCount={alertedEventIds.length}
-              allEvents={events}
-              bookmarks={bookmarks}
-            />
-          </div>
-
-          {/* Staggered Vertical safety incident Cards list or Daily Summary Briefing */}
-          <div className="h-1/2 border-t border-slate-200 flex flex-col overflow-hidden bg-[#F8FAFC]">
-            <div className="bg-slate-50 border-b border-slate-105 flex items-center justify-between shrink-0 p-2 border-slate-150">
-              <div className="flex gap-1 bg-slate-200/50 p-1 rounded-lg overflow-x-auto whitespace-nowrap scrollbar-none shrink-0 max-w-[85%] scroll-smooth">
-                <button
-                  type="button"
-                  id="incident-list-tab"
-                  onClick={() => setSidebarTab("list")}
-                  className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide leading-none ${
-                    sidebarTab === "list"
-                      ? "bg-white text-slate-800 shadow-sm"
-                      : "text-slate-450 hover:text-slate-705"
-                  }`}
-                >
-                  List ({filteredEvents.length})
-                </button>
-                <button
-                  type="button"
-                  id="chat-tab-trigger"
-                  onClick={() => setSidebarTab("chat")}
-                  className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide flex items-center gap-1 leading-none ${
-                    sidebarTab === "chat"
-                      ? "bg-indigo-600 text-white shadow-sm"
-                      : "text-slate-450 hover:text-indigo-650"
-                  }`}
-                >
-                  <MessageSquare size={11} className={sidebarTab === "chat" ? "animate-pulse" : ""} />
-                  AI Chat
-                </button>
-                <button
-                  type="button"
-                  id="daily-summary-tab-trigger"
-                  onClick={() => setSidebarTab("summary")}
-                  className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide flex items-center gap-1 leading-none ${
-                    sidebarTab === "summary"
-                      ? "bg-blue-605 text-slate-800 bg-white shadow-sm"
-                      : "text-slate-450 hover:text-blue-650"
-                  }`}
-                >
-                  <Sparkles size={11} className={sidebarTab === "summary" ? "animate-pulse" : ""} />
-                  24H Summary
-                </button>
-                <button
-                  type="button"
-                  id="trends-tab-trigger"
-                  onClick={() => setSidebarTab("trends")}
-                  className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide flex items-center gap-1 leading-none ${
-                    sidebarTab === "trends"
-                      ? "bg-[#0F172A] text-white shadow-sm"
-                      : "text-slate-450 hover:text-[#0F172A]"
-                  }`}
-                >
-                  <TrendingUp size={11} />
-                  Trends
-                </button>
-                <button
-                  type="button"
-                  id="risk-tab-trigger"
-                  onClick={() => setSidebarTab("risk")}
-                  className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide flex items-center gap-1 leading-none ${
-                    sidebarTab === "risk"
-                      ? "bg-red-650 text-white shadow-sm"
-                      : "text-slate-450 hover:text-red-700"
-                  }`}
-                >
-                  <ShieldAlert size={11} />
-                  Risk
-                </button>
-                <button
-                  type="button"
-                  id="bookmarks-tab-trigger"
-                  onClick={() => setSidebarTab("bookmarks")}
-                  className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide flex items-center gap-1 leading-none ${
-                    sidebarTab === "bookmarks"
-                      ? "bg-amber-500 text-white shadow-sm"
-                      : "text-slate-450 hover:text-amber-600"
-                  }`}
-                >
-                  <Bookmark size={11} className={sidebarTab === "bookmarks" ? "fill-white" : ""} />
-                  Saved ({bookmarks.length})
-                </button>
-                <button
-                  type="button"
-                  id="upload-news-tab-trigger"
-                  onClick={() => setSidebarTab("upload_news")}
-                  className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide flex items-center gap-1 leading-none ${
-                    sidebarTab === "upload_news"
-                      ? "bg-blue-600 text-white shadow-sm"
-                      : "text-slate-450 hover:text-blue-650"
-                  }`}
-                >
-                  <Upload size={11} />
-                  Upload
-                </button>
+           {/* Left Workspace Panel: Sidebar Filters + Interactive Cards List */}
+        <div 
+          ref={sidebarContainerRef}
+          style={{
+            width: isSidebarCollapsed ? "0px" : `${sidebarWidth}px`,
+            minWidth: isSidebarCollapsed ? "0px" : `${sidebarWidth}px`,
+          }}
+          className={`border-r border-slate-200 flex flex-col h-full bg-white shrink-0 print-hidden relative ${
+            isDraggingSidebar ? "" : "transition-all duration-300"
+          }`}
+        >
+          {/* Vertical Resizer Handle Edge */}
+          <div
+            onMouseDown={handleSidebarResizeStart}
+            className={`absolute top-0 w-4 h-full cursor-col-resize z-[1001] bg-transparent flex items-center justify-center group select-none ${
+              isDraggingSidebar ? "bg-blue-500/5" : ""
+            }`}
+            style={isSidebarCollapsed ? { left: 0 } : { right: "-8px" }}
+            title={isSidebarCollapsed ? "Click or drag right to restore Sidebar" : "Drag left or right with your cursor to resize sidebar width / Click to collapse"}
+          >
+            {/* Thin vertical line that lights up */}
+            <div className={`w-0.5 h-full border-r border-dashed transition-all ${
+              isDraggingSidebar 
+                ? "border-blue-650 bg-blue-650 scale-x-125 opacity-100" 
+                : "border-slate-300 hover:border-blue-400 group-hover:border-blue-500 group-hover:scale-x-110 opacity-75 group-hover:opacity-100"
+            }`} />
+            
+            {/* Grip Handle Indicator Capsule */}
+            <div 
+              className={`absolute w-5 h-12 rounded-full border shadow-md transition-all flex flex-col gap-1 items-center justify-center cursor-pointer ${
+                isDraggingSidebar 
+                  ? "bg-slate-900 border-slate-800 text-white scale-110" 
+                  : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-800 hover:scale-105"
+              }`}
+              style={{ top: "calc(50% - 24px)" }}
+            >
+              {isSidebarCollapsed ? (
+                <ChevronRight size={10} className="font-bold stroke-[3]" />
+              ) : (
+                <ChevronLeft size={10} className="font-bold stroke-[3]" />
+              )}
+              <div className="flex flex-col gap-0.5">
+                <div className="w-1 h-1 rounded-full bg-slate-300 group-hover:bg-slate-500" />
+                <div className="w-1 h-1 rounded-full bg-slate-300 group-hover:bg-slate-500" />
               </div>
-              <span className="text-[9.5px] text-slate-400 font-mono font-bold pr-2 uppercase select-none shrink-0">
-                {sidebarTab === "list" ? "Live Feed" : sidebarTab === "chat" ? "AI Guidance" : sidebarTab === "summary" ? "Briefing" : sidebarTab === "trends" ? "Stats" : sidebarTab === "risk" ? "Risk Index" : sidebarTab === "bookmarks" ? "Watchlist" : "Uploads"}
-              </span>
             </div>
-
-            {sidebarTab === "trends" ? (
-              <div className="flex-1 overflow-hidden" id="tab-trends-container">
-                <TrendsPanel events={events} />
-              </div>
-            ) : sidebarTab === "chat" ? (
-              <div className="flex-1 overflow-hidden flex flex-col bg-slate-55" id="tab-chat-container">
-                <SafetyChatbot
-                  events={events}
-                  onSelectEvent={(evt) => setSelectedEvent(evt)}
-                />
-              </div>
-            ) : sidebarTab === "summary" ? (
-              <div className="flex-1 overflow-hidden">
-                <DailySummary events={events} />
-              </div>
-            ) : sidebarTab === "risk" ? (
-              <div className="flex-1 overflow-hidden flex flex-col bg-slate-55" id="tab-risk-container">
-                <RiskAssessment
-                  events={events}
-                  onSelectNeighbourhood={(neighbourhood, firstEvt) => {
-                    if (firstEvt) {
-                      setSelectedEvent(firstEvt);
-                    }
-                    setFilters(prev => ({
-                      ...prev,
-                      searchQuery: neighbourhood
-                    }));
-                  }}
-                />
-              </div>
-            ) : sidebarTab === "upload_news" ? (
-              <div className="flex-1 overflow-hidden flex flex-col bg-slate-55">
-                <UploadNewsPanel
-                  configSources={configSourcesList}
-                  onSuccess={(addedCount, addedEvents) => {
-                    loadData();
-                    if (addedCount > 0 && addedEvents.length > 0) {
-                      setSuccessToast(`Parsed ${addedCount} news safety events! Centering map...`);
-                      setSelectedEvent(addedEvents[0]);
-                    }
-                  }}
-                />
-              </div>
-            ) : sidebarTab === "bookmarks" ? (
-              <div className="flex-1 overflow-hidden flex flex-col bg-slate-55" id="tab-bookmarks-container">
-                <BookmarksPanel
-                  events={events}
-                  bookmarks={bookmarks}
-                  bookmarkNotes={bookmarkNotes}
-                  onSelectEvent={(evt) => setSelectedEvent(evt)}
-                  onToggleBookmark={handleToggleBookmark}
-                  onUpdateBookmarkNote={handleUpdateBookmarkNote}
-                />
+          </div>
+          {/* Main workspace grouping */}
+          <div style={isSidebarCollapsed ? { display: "none" } : {}} className="flex-1 flex flex-col overflow-hidden w-full h-full">
+            {/* 1. UPPER FEED FILTERS CONTAINER */}
+            {sizes.filters?.isMinimized ? (
+              <div className="h-[48px] shrink-0 bg-slate-50 border-b border-slate-150 flex items-center justify-between px-3 w-full font-mono text-[10px] select-none text-slate-500 font-bold">
+                <span className="flex items-center gap-1.5 uppercase font-black text-slate-500 tracking-wider">
+                  <Filter size={11} className="text-slate-400" />
+                  Filters (Collapsed)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => toggleSizing("filters", "normal")}
+                  className="cursor-pointer text-[9.5px] bg-white hover:bg-slate-100 border border-slate-250 hover:border-slate-350 text-blue-600 px-2 py-0.5 rounded font-black font-sans uppercase shadow-sm"
+                >
+                  Expand Filters ↗
+                </button>
               </div>
             ) : (
-              <div className="flex-1 overflow-y-auto p-3 space-y-2 scrollbar-thin scrollbar-thumb-slate-200">
-                {compareEventIds.length > 0 && (
-                  <div id="compare-selection-banner" className="bg-blue-50/90 border border-blue-200 rounded-lg p-2.5 shadow-sm space-y-2 flex flex-col text-slate-800 animate-fadeIn mb-1">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[9px] font-mono font-bold text-blue-800 uppercase tracking-wider flex items-center gap-1.5">
-                        <ArrowLeftRight size={11} className="text-blue-600 shrink-0" />
-                        Comparison Pool ({compareEventIds.length}/2 Selected)
-                      </span>
-                      <button
-                        type="button"
-                        id="compare-clear-btn"
-                        onClick={() => setCompareEventIds([])}
-                        className="text-[10px] font-mono font-bold text-slate-450 hover:text-slate-700 hover:underline cursor-pointer bg-transparent border-none"
-                      >
-                        Clear Pool
-                      </button>
+              <div 
+                style={
+                  sizes.sidebarTabs?.isMinimized
+                    ? { height: "100%" }
+                    : sizes.filters?.isMinimized
+                      ? { height: "0px", overflow: "hidden" }
+                      : { height: `${filtersHeightPercent}%` }
+                }
+                className={`flex flex-col overflow-hidden relative border-b border-slate-200/60 ${
+                  isDraggingSplit ? "" : "transition-all duration-300"
+                }`}
+              >
+                {/* Horizontal Resizer Handle Edge */}
+                {!sizes.filters?.isMinimized && !sizes.sidebarTabs?.isMinimized && (
+                  <div
+                    onMouseDown={handleSplitResizeStart}
+                    className={`absolute -bottom-2 left-0 right-0 h-4 cursor-row-resize z-[1001] bg-transparent flex items-center justify-center group select-none ${
+                      isDraggingSplit ? "bg-blue-500/5" : ""
+                    }`}
+                    title="Drag up or down with your cursor to distribute height between filters and feed"
+                  >
+                    {/* Visual horizontal splitter line */}
+                    <div className={`h-0.5 w-full border-b border-dashed transition-all ${
+                      isDraggingSplit
+                        ? "border-blue-650 bg-blue-650 scale-y-125 opacity-100"
+                        : "border-slate-300 hover:border-blue-400 group-hover:border-blue-500 group-hover:scale-y-110 opacity-75 group-hover:opacity-100"
+                    }`} />
+                    
+                    {/* Horizontal capsule pill handle */}
+                    <div className={`absolute h-1.5 w-12 rounded-full border shadow-sm transition-all flex gap-1 items-center justify-center ${
+                      isDraggingSplit
+                        ? "bg-blue-650 border-blue-500 scale-110"
+                        : "bg-white border-slate-200 group-hover:bg-blue-50 group-hover:border-blue-300 group-hover:scale-105"
+                    }`}>
+                      {/* 3 tiny horizontal grip dots */}
+                      <div className={`h-1 w-1 rounded-full ${isDraggingSplit ? "bg-blue-100" : "bg-slate-400 group-hover:bg-blue-500"}`} />
+                      <div className={`h-1 w-1 rounded-full ${isDraggingSplit ? "bg-blue-100" : "bg-slate-400 group-hover:bg-blue-500"}`} />
+                      <div className={`h-1 w-1 rounded-full ${isDraggingSplit ? "bg-blue-100" : "bg-slate-400 group-hover:bg-blue-500"}`} />
                     </div>
-                    <div className="text-[10px] text-slate-550 leading-relaxed font-sans">
-                      {compareEventIds.length === 1 ? (
-                        <span>Select another card's compare checkbox to analyze difference indicators.</span>
-                      ) : (
-                        <span className="text-blue-700 font-bold">Contrast analysis loaded! Open side-by-side view.</span>
-                      )}
-                    </div>
-                    {compareEventIds.length === 2 && (
-                      <button
-                        type="button"
-                        id="open-incident-comparison-trigger-btn"
-                        onClick={() => setIsCompareOpen(true)}
-                        className="cursor-pointer w-full text-center py-1.5 text-xs font-bold rounded bg-blue-600 hover:bg-blue-500 border border-blue-700 hover:border-blue-600 text-white shadow-sm flex items-center justify-center gap-1.5 transition-colors"
-                      >
-                        <ArrowLeftRight size={12} className="text-white shrink-0" />
-                        <span>Compare Selected Side-by-Side</span>
-                      </button>
-                    )}
                   </div>
                 )}
-
-                {filteredEvents.length > 0 && (
-                  <div id="list-export-container" className="flex items-center justify-between bg-slate-50 border border-slate-200/80 rounded-lg p-2 shadow-sm select-none mb-1">
-                    <div className="pl-1">
-                      <p className="text-[9px] font-black font-mono text-slate-400 uppercase tracking-widest leading-tight">Live Scope</p>
-                      <p className="text-[11px] font-bold text-slate-700 font-mono leading-none mt-0.5">
-                        {filteredEvents.length} {filteredEvents.length === 1 ? "Incident" : "Incidents"}
-                      </p>
-                    </div>
+                {/* Embedded controls for Filters */}
+                <div className="bg-slate-50/80 border-b border-slate-100 p-2 px-3.5 flex items-center justify-between text-[10.5px] shrink-0 select-none">
+                  <span className="font-extrabold uppercase tracking-widest text-[9.5px] text-slate-500 font-mono flex items-center gap-1.5">
+                    <Filter size={11} className="text-blue-500" />
+                    Feed Filters & Synclist
+                  </span>
+                  <div className="flex items-center gap-1.5">
                     <button
                       type="button"
-                      id="download-csv-list-btn"
-                      onClick={() => exportListToCSV(filteredEvents)}
-                      className="inline-flex items-center gap-1.5 py-1.5 px-3 bg-white hover:bg-blue-50 text-slate-700 font-mono text-[9.5px] font-extrabold rounded border border-slate-200 hover:border-blue-200 shadow-sm cursor-pointer transition-all uppercase tracking-wide h-fit"
+                      title="Minimize Filters block"
+                      onClick={() => toggleSizing("filters", "minimize")}
+                      className="p-1 hover:bg-slate-200 text-slate-400 hover:text-slate-800 rounded cursor-pointer transition-colors"
                     >
-                      <Download size={11} className="shrink-0 text-blue-500" />
-                      Download CSV
+                      <Minus size={11} />
+                    </button>
+                    <button
+                      type="button"
+                      title="Enlarge Filters height"
+                      onClick={() => toggleSizing("filters", "enlarge")}
+                      className={`p-1 rounded cursor-pointer transition-all ${
+                        sizes.filters?.isEnlarged 
+                          ? "bg-emerald-50 text-emerald-600 border border-emerald-200" 
+                          : "hover:bg-slate-200 text-slate-400 hover:text-slate-800"
+                      }`}
+                    >
+                      <Plus size={11} />
                     </button>
                   </div>
-                )}
-                {filteredEvents.length === 0 ? (
-                  <div className="py-12 text-center space-y-2">
-                    <AlertCircle size={22} className="mx-auto text-slate-400 animate-pulse" />
-                    <p className="text-xs text-slate-500 font-medium">No safety incidents found matching current filter scope.</p>
+                </div>
+
+                <div className="flex-1 overflow-hidden">
+                  <EventFilters
+                    filters={filters}
+                    onChange={setFilters}
+                    availableTypes={availableTypes}
+                    availableSources={availableSources}
+                    onIngest={handleIngestFeeds}
+                    isIngesting={isIngesting}
+                    onOpenReportModal={() => setIsReportModalOpen(true)}
+                    totalCount={events.length}
+                    filteredCount={filteredEvents.length}
+                    autoRefreshEnabled={autoRefreshEnabled}
+                    onToggleAutoRefresh={handleToggleAutoRefresh}
+                    nextRefreshMinutesLeft={nextRefreshMinutesLeft}
+                    filteredEvents={filteredEvents}
+                    isAlertScannerActive={isAlertScannerActive}
+                    onToggleAlertScanner={handleToggleAlertScanner}
+                    lastAlertScanTime={lastAlertScanTime}
+                    onTriggerManualScan={runProximityAlertScan}
+                    onClearAlertHistory={handleClearAlertHistory}
+                    alertedCount={alertedEventIds.length}
+                    allEvents={events}
+                    bookmarks={bookmarks}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* 2. LOWER FEED LIST & TOOLS TAB PANELS */}
+            {sizes.sidebarTabs?.isMinimized ? (
+              <div className="h-[40px] shrink-0 bg-slate-50 border-t border-slate-200 flex items-center justify-between px-3 w-full font-mono text-[10px] select-none text-slate-500 font-bold">
+                <span className="flex items-center gap-1.5 uppercase font-black text-slate-450 tracking-wider">
+                  <BarChart3 size={11} className="text-slate-400" />
+                  Live Feed & Tools (Collapsed)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => toggleSizing("sidebarTabs", "normal")}
+                  className="cursor-pointer text-[9.5px] bg-white hover:bg-slate-100 border border-slate-250 hover:border-slate-350 text-blue-600 px-2 py-0.5 rounded font-black font-sans uppercase shadow-sm"
+                >
+                  Expand Tools ↗
+                </button>
+              </div>
+            ) : (
+              <div 
+                style={
+                  sizes.filters?.isMinimized
+                    ? { height: "100%" }
+                    : sizes.sidebarTabs?.isMinimized
+                      ? { height: "0px", overflow: "hidden" }
+                      : { height: `${100 - filtersHeightPercent}%` }
+                }
+                className={`flex-1 flex flex-col overflow-hidden bg-[#F8FAFC]/50 ${
+                  isDraggingSplit ? "" : "transition-all duration-300"
+                }`}
+              >
+                <div className="bg-slate-50 border-b border-slate-105 flex items-center justify-between shrink-0 p-2 border-slate-150 select-none">
+                  <div className="flex gap-1 bg-slate-200/50 p-1 rounded-lg overflow-x-auto whitespace-nowrap scrollbar-none shrink-0 max-w-[75%] scroll-smooth">
+                    <button
+                      type="button"
+                      id="incident-list-tab"
+                      onClick={() => setSidebarTab("list")}
+                      className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide leading-none ${
+                        sidebarTab === "list"
+                          ? "bg-white text-slate-800 shadow-sm"
+                          : "text-slate-450 hover:text-slate-705"
+                      }`}
+                    >
+                      List ({filteredEvents.length})
+                    </button>
+                    <button
+                      type="button"
+                      id="chat-tab-trigger"
+                      onClick={() => setSidebarTab("chat")}
+                      className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide flex items-center gap-1 leading-none ${
+                        sidebarTab === "chat"
+                          ? "bg-indigo-600 text-white shadow-sm"
+                          : "text-slate-450 hover:text-indigo-650"
+                      }`}
+                    >
+                      <MessageSquare size={11} className={sidebarTab === "chat" ? "animate-pulse" : ""} />
+                      AI Chat
+                    </button>
+                    <button
+                      type="button"
+                      id="daily-summary-tab-trigger"
+                      onClick={() => setSidebarTab("summary")}
+                      className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide flex items-center gap-1 leading-none ${
+                        sidebarTab === "summary"
+                          ? "bg-blue-605 text-slate-800 bg-white shadow-sm"
+                          : "text-slate-450 hover:text-blue-650"
+                      }`}
+                    >
+                      <Sparkles size={11} className={sidebarTab === "summary" ? "animate-pulse" : ""} />
+                      24H Summary
+                    </button>
+                    <button
+                      type="button"
+                      id="trends-tab-trigger"
+                      onClick={() => setSidebarTab("trends")}
+                      className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide flex items-center gap-1 leading-none ${
+                        sidebarTab === "trends"
+                          ? "bg-[#0F172A] text-white shadow-sm"
+                          : "text-slate-450 hover:text-[#0F172A]"
+                      }`}
+                    >
+                      <TrendingUp size={11} />
+                      Trends
+                    </button>
+                    <button
+                      type="button"
+                      id="risk-tab-trigger"
+                      onClick={() => setSidebarTab("risk")}
+                      className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide flex items-center gap-1 leading-none ${
+                        sidebarTab === "risk"
+                          ? "bg-red-650 text-white shadow-sm"
+                          : "text-slate-450 hover:text-red-700"
+                      }`}
+                    >
+                      <ShieldAlert size={11} />
+                      Risk
+                    </button>
+                    <button
+                      type="button"
+                      id="projection-tab-trigger"
+                      onClick={() => setSidebarTab("projection")}
+                      className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide flex items-center gap-1 leading-none ${
+                        sidebarTab === "projection"
+                          ? "bg-rose-500 text-white shadow-sm"
+                          : "text-slate-450 hover:text-rose-600"
+                      }`}
+                    >
+                      <Flame size={11} className={sidebarTab === "projection" ? "animate-pulse" : ""} />
+                      Hotspots
+                    </button>
+                    <button
+                      type="button"
+                      id="bookmarks-tab-trigger"
+                      onClick={() => setSidebarTab("bookmarks")}
+                      className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide flex items-center gap-1 leading-none ${
+                        sidebarTab === "bookmarks"
+                          ? "bg-amber-500 text-white shadow-sm"
+                          : "text-slate-450 hover:text-amber-600"
+                      }`}
+                    >
+                      <Bookmark size={11} className={sidebarTab === "bookmarks" ? "fill-white" : ""} />
+                      Saved ({bookmarks.length})
+                    </button>
+                    <button
+                      type="button"
+                      id="upload-news-tab-trigger"
+                      onClick={() => setSidebarTab("upload_news")}
+                      className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide flex items-center gap-1 leading-none ${
+                        sidebarTab === "upload_news"
+                          ? "bg-blue-600 text-white shadow-sm"
+                          : "text-slate-450 hover:text-blue-650"
+                      }`}
+                    >
+                      <Upload size={11} />
+                      Upload
+                    </button>
+                    <button
+                      type="button"
+                      id="zones-tab-trigger"
+                      onClick={() => setSidebarTab("zones")}
+                      className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide flex items-center gap-1 leading-none ${
+                        sidebarTab === "zones"
+                          ? "bg-violet-605 text-violet-800 bg-white shadow-sm border border-violet-200"
+                          : "text-slate-450 hover:text-violet-655"
+                      }`}
+                    >
+                      <Bell size={11} className={sidebarTab === "zones" ? "animate-bounce" : ""} />
+                      Alert Zones ({customPins.filter(p => p.isAlertZone).length})
+                    </button>
+                  </div>
+                  
+                  {/* Inline size buttons for tools */}
+                  <div className="flex items-center gap-1 pr-1 border-l border-slate-200 pl-2 shrink-0">
+                    <button
+                      type="button"
+                      title="Minimize tools results"
+                      onClick={() => toggleSizing("sidebarTabs", "minimize")}
+                      className="p-1 hover:bg-slate-200 text-slate-400 hover:text-slate-800 rounded cursor-pointer transition-colors"
+                    >
+                      <Minus size={11} />
+                    </button>
+                    <button
+                      type="button"
+                      title="Enlarge tools results"
+                      onClick={() => toggleSizing("sidebarTabs", "enlarge")}
+                      className={`p-1 rounded cursor-pointer transition-all ${
+                        sizes.sidebarTabs?.isEnlarged 
+                          ? "bg-emerald-50 text-emerald-600 border border-emerald-200" 
+                          : "hover:bg-slate-200 text-slate-400 hover:text-slate-800"
+                      }`}
+                    >
+                      <Plus size={11} />
+                    </button>
+                  </div>
+                </div>
+
+                {sidebarTab === "trends" ? (
+                  <div className="flex-1 overflow-hidden" id="tab-trends-container">
+                    <TrendsPanel events={events} />
+                  </div>
+                ) : sidebarTab === "chat" ? (
+                  <div className="flex-1 overflow-hidden flex flex-col bg-slate-55" id="tab-chat-container">
+                    <SafetyChatbot
+                      events={events}
+                      onSelectEvent={(evt) => setSelectedEvent(evt)}
+                    />
+                  </div>
+                ) : sidebarTab === "summary" ? (
+                  <div className="flex-1 overflow-hidden">
+                    <DailySummary events={events} />
+                  </div>
+                ) : sidebarTab === "risk" ? (
+                  <div className="flex-1 overflow-hidden flex flex-col bg-slate-55" id="tab-risk-container">
+                    <RiskAssessment
+                      events={events}
+                      onSelectNeighbourhood={(neighbourhood, firstEvt) => {
+                        if (firstEvt) {
+                          setSelectedEvent(firstEvt);
+                        }
+                        setFilters(prev => ({
+                          ...prev,
+                          searchQuery: neighbourhood
+                        }));
+                      }}
+                    />
+                  </div>
+                ) : sidebarTab === "projection" ? (
+                  <div className="flex-1 overflow-hidden flex flex-col bg-slate-55" id="tab-projection-container">
+                    <HotspotProjectionPanel
+                      events={events}
+                      showHeatmap={showHeatmap}
+                      setShowHeatmap={setShowHeatmap}
+                      heatmapOpacity={heatmapOpacity}
+                      onToggleOpacity={handleToggleHeatmapOpacity}
+                      heatmapRadiusMultiplier={heatmapRadiusMultiplier}
+                      setHeatmapRadiusMultiplier={setHeatmapRadiusMultiplier}
+                      onAlignMap={(coords) => {
+                        const dummyEvent = {
+                          id: `temp-coords-${coords[0].toFixed(4)}-${coords[1].toFixed(4)}`,
+                          title: "Projected Risk Focus Area",
+                          summary: "Hotspot zone identified by spatial algorithm.",
+                          severity: "high" as SeverityType,
+                          latitude: coords[0],
+                          longitude: coords[1],
+                          locationText: "Projected High-stakes Zone",
+                          publishedAt: new Date().toISOString(),
+                        } as EventItem;
+                        setSelectedEvent(dummyEvent);
+                      }}
+                    />
+                  </div>
+                ) : sidebarTab === "upload_news" ? (
+                  <div className="flex-1 overflow-hidden flex flex-col bg-slate-55">
+                    <UploadNewsPanel
+                      configSources={configSourcesList}
+                      onSuccess={(addedCount, addedEvents) => {
+                        loadData();
+                        if (addedCount > 0 && addedEvents.length > 0) {
+                          setSuccessToast(`Parsed ${addedCount} news safety events! Centering map...`);
+                          setSelectedEvent(addedEvents[0]);
+                        }
+                      }}
+                    />
+                  </div>
+                ) : sidebarTab === "bookmarks" ? (
+                  <div className="flex-1 overflow-hidden flex flex-col bg-slate-55" id="tab-bookmarks-container">
+                    <BookmarksPanel
+                      events={events}
+                      bookmarks={bookmarks}
+                      bookmarkNotes={bookmarkNotes}
+                      onSelectEvent={(evt) => setSelectedEvent(evt)}
+                      onToggleBookmark={handleToggleBookmark}
+                      onUpdateBookmarkNote={handleUpdateBookmarkNote}
+                    />
+                  </div>
+                ) : sidebarTab === "zones" ? (
+                  <div className="flex-1 overflow-hidden flex flex-col bg-slate-55" id="tab-zones-container">
+                    <AlertZonesPanel
+                      customPins={customPins}
+                      setCustomPins={setCustomPins}
+                      events={events}
+                      onSelectZone={(pin) => {
+                        const dummyEvent = {
+                          id: `custom-pin-${pin.id}`,
+                          title: pin.title,
+                          summary: pin.note || "User Safety Watch Area",
+                          severity: pin.severity,
+                          latitude: pin.latitude,
+                          longitude: pin.longitude,
+                          locationText: "User Alert Zone",
+                          publishedAt: pin.createdAt,
+                          eventType: pin.zoneType || "custom"
+                        } as any;
+                        setSelectedEvent(dummyEvent);
+                      }}
+                    />
                   </div>
                 ) : (
-                  filteredEvents.map((evt) => {
-                    const isSelected = selectedEvent ? selectedEvent.id === evt.id : false;
-                    const isCompared = compareEventIds.includes(evt.id);
-                    return (
-                      <div
-                        key={evt.id}
-                        id={`event-item-card-${evt.id}`}
-                        onClick={() => setSelectedEvent(evt)}
-                        className={`p-3.5 rounded border text-left cursor-pointer transition-all relative ${getCardSeverityBorder(
-                          evt.severity
-                        )} ${
-                          isSelected
-                            ? "bg-blue-50/45 border-blue-500 shadow-sm ring-1 ring-blue-500/10"
-                            : "bg-white border-slate-200 hover:bg-slate-50 hover:border-slate-350"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2 overflow-hidden mb-1.5">
-                          <div className="flex items-center gap-1.5 truncate">
-                            <label
-                              id={`compare-label-input-${evt.id}`}
-                              className="inline-flex items-center gap-1 cursor-pointer select-none pb-0.5 shrink-0"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <input
-                                type="checkbox"
-                                value={evt.id}
-                                id={`compare-checkbox-input-${evt.id}`}
-                                checked={isCompared}
-                                onChange={() => handleToggleCompare(evt.id)}
-                                className="rounded border-slate-305 text-blue-600 focus:ring-blue-500 w-3 h-3 cursor-pointer"
-                              />
-                              <span className="text-[9px] font-black font-mono tracking-tight text-slate-400 hover:text-slate-600 uppercase">
-                                Compare
-                              </span>
-                            </label>
-                            <span className="text-[9px] text-slate-250 font-semibold select-none leading-none">|</span>
-                            <span className="text-[9px] font-mono text-blue-600 font-bold tracking-wider truncate">
-                              {evt.sourceName}
-                            </span>
-                          </div>
-                          <span className="text-[10px] font-mono text-slate-400 font-semibold shrink-0">
-                            {formatDistanceTime(evt.publishedAt)}
+                  <div className="flex-1 overflow-y-auto p-3 space-y-2 scrollbar-thin scrollbar-thumb-slate-200">
+                    {compareEventIds.length > 0 && (
+                      <div id="compare-selection-banner" className="bg-blue-50/90 border border-blue-200 rounded-lg p-2.5 shadow-sm space-y-2 flex flex-col text-slate-800 animate-fadeIn mb-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[9px] font-mono font-bold text-blue-800 uppercase tracking-wider flex items-center gap-1.5">
+                            <ArrowLeftRight size={11} className="text-blue-600 shrink-0" />
+                            Comparison Pool ({compareEventIds.length}/2 Selected)
                           </span>
+                          <button
+                            type="button"
+                            id="compare-clear-btn"
+                            onClick={() => setCompareEventIds([])}
+                            className="text-[10px] font-mono font-bold text-slate-450 hover:text-slate-700 hover:underline cursor-pointer bg-transparent border-none"
+                          >
+                            Clear Pool
+                          </button>
                         </div>
-                        
-                        <h4 className="text-[11.5px] font-bold text-slate-800 line-clamp-1 truncate mb-1">
-                          {evt.title}
-                        </h4>
-
-                        <p className="text-[10.5px] text-slate-500 leading-normal line-clamp-2 max-h-8 overflow-hidden mb-2 font-medium">
-                          {evt.summary}
-                        </p>
-
-                        <div className="flex items-center justify-between text-[9px] text-slate-400 font-mono mt-1 pt-1.5 border-t border-slate-100">
-                          <div className="flex flex-col gap-0.5">
-                            <span className="capitalize font-semibold text-slate-600">{evt.eventType?.replace(/_/g, " ")}</span>
-                            {filters.userLat !== null && filters.userLng !== null && evt.latitude && evt.longitude && (
-                              <span className="font-bold text-blue-605 text-[9.5px]">
-                                ⎔ {getDistanceKm(filters.userLat, filters.userLng, evt.latitude, evt.longitude).toFixed(1)} km away
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex gap-2 items-center">
-                            <span className="font-bold text-slate-450 text-[10px] capitalize">
-                              {evt.locationPrecision}
-                            </span>
-                            {bookmarks.includes(evt.id) && (
-                              <span className="text-amber-600 font-bold">★ SAVED</span>
-                            )}
-                          </div>
+                        <div className="text-[10px] text-slate-550 leading-relaxed font-sans">
+                          {compareEventIds.length === 1 ? (
+                            <span>Select another card's compare checkbox to analyze difference indicators.</span>
+                          ) : (
+                            <span className="text-blue-700 font-bold">Contrast analysis loaded! Open side-by-side view.</span>
+                          )}
                         </div>
+                        {compareEventIds.length === 2 && (
+                          <button
+                            type="button"
+                            id="open-incident-comparison-trigger-btn"
+                            onClick={() => setIsCompareOpen(true)}
+                            className="cursor-pointer w-full text-center py-1.5 text-xs font-bold rounded bg-blue-600 hover:bg-blue-500 border border-blue-700 hover:border-blue-600 text-white shadow-sm flex items-center justify-center gap-1.5 transition-colors"
+                          >
+                            <ArrowLeftRight size={12} className="text-white shrink-0" />
+                            <span>Compare Selected Side-by-Side</span>
+                          </button>
+                        )}
                       </div>
-                    );
-                  })
+                    )}
+
+                    {filteredEvents.length > 0 && (
+                      <div id="list-export-container" className="flex items-center justify-between bg-slate-50 border border-slate-200/80 rounded-lg p-2 shadow-sm select-none mb-1">
+                        <div className="pl-1">
+                          <p className="text-[9px] font-black font-mono text-slate-400 uppercase tracking-widest leading-tight">Live Scope</p>
+                          <p className="text-[11px] font-bold text-slate-700 font-mono leading-none mt-0.5">
+                            {filteredEvents.length} {filteredEvents.length === 1 ? "Incident" : "Incidents"}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          id="download-csv-list-btn"
+                          onClick={() => exportListToCSV(filteredEvents)}
+                          className="inline-flex items-center gap-1.5 py-1.5 px-3 bg-white hover:bg-blue-50 text-slate-700 font-mono text-[9.5px] font-extrabold rounded border border-slate-200 hover:border-blue-200 shadow-sm cursor-pointer transition-all uppercase tracking-wide h-fit"
+                        >
+                          <Download size={11} className="shrink-0 text-blue-500" />
+                          Download CSV
+                        </button>
+                      </div>
+                    )}
+                    {filteredEvents.length === 0 ? (
+                      <div className="py-12 text-center space-y-2">
+                        <AlertCircle size={22} className="mx-auto text-slate-400 animate-pulse" />
+                        <p className="text-xs text-slate-500 font-medium">No safety incidents found matching current filter scope.</p>
+                      </div>
+                    ) : (
+                      filteredEvents.map((evt) => {
+                        const isSelected = selectedEvent ? selectedEvent.id === evt.id : false;
+                        const isCompared = compareEventIds.includes(evt.id);
+                        return (
+                          <div
+                            key={evt.id}
+                            id={`event-item-card-${evt.id}`}
+                            onClick={() => setSelectedEvent(evt)}
+                            className={`p-3.5 rounded border text-left cursor-pointer transition-all relative ${getCardSeverityBorder(
+                              evt.severity
+                            )} ${
+                              isSelected
+                                ? "bg-blue-50/45 border-blue-500 shadow-sm ring-1 ring-blue-500/10"
+                                : "bg-white border-slate-200 hover:bg-slate-50 hover:border-slate-350"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2 overflow-hidden mb-1.5">
+                              <div className="flex items-center gap-1.5 truncate">
+                                <label
+                                  id={`compare-label-input-${evt.id}`}
+                                  className="inline-flex items-center gap-1 cursor-pointer select-none pb-0.5 shrink-0"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    value={evt.id}
+                                    id={`compare-checkbox-input-${evt.id}`}
+                                    checked={isCompared}
+                                    onChange={() => handleToggleCompare(evt.id)}
+                                    className="rounded border-slate-305 text-blue-600 focus:ring-blue-500 w-3 h-3 cursor-pointer"
+                                  />
+                                  <span className="text-[9px] font-black font-mono tracking-tight text-slate-400 hover:text-slate-600 uppercase">
+                                    Compare
+                                  </span>
+                                </label>
+                                <span className="text-[9px] text-slate-250 font-semibold select-none leading-none">|</span>
+                                <span className="text-[9px] font-mono text-blue-600 font-bold tracking-wider truncate">
+                                  {evt.sourceName}
+                                </span>
+                              </div>
+                              <span className="text-[10px] font-mono text-slate-400 font-semibold shrink-0">
+                                {formatDistanceTime(evt.publishedAt)}
+                              </span>
+                            </div>
+                            
+                            <h4 className="text-[11.5px] font-bold text-slate-800 line-clamp-1 truncate mb-1">
+                              {evt.title}
+                            </h4>
+
+                            <p className="text-[10.5px] text-slate-500 leading-normal line-clamp-2 max-h-8 overflow-hidden mb-2 font-medium">
+                              {evt.summary}
+                            </p>
+
+                            <div className="flex items-center justify-between text-[9px] text-slate-400 font-mono mt-1 pt-1.5 border-t border-slate-100">
+                              <div className="flex flex-col gap-0.5">
+                                <span className="capitalize font-semibold text-slate-600">{evt.eventType?.replace(/_/g, " ")}</span>
+                                {filters.userLat !== null && filters.userLng !== null && evt.latitude && evt.longitude && (
+                                  <span className="font-bold text-blue-605 text-[9.5px]">
+                                    ⎔ {getDistanceKm(filters.userLat, filters.userLng, evt.latitude, evt.longitude).toFixed(1)} km away
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex gap-2 items-center">
+                                <span className="font-bold text-slate-450 text-[10px] capitalize">
+                                  {evt.locationPrecision}
+                                </span>
+                                {bookmarks.includes(evt.id) && (
+                                  <span className="text-amber-600 font-bold">★ SAVED</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
                 )}
               </div>
             )}
@@ -1182,8 +1915,225 @@ export default function App() {
         {/* Center Sandbox: Leaflet Canvas Map + Legend Guides */}
         <div className="flex-1 flex flex-col h-full overflow-hidden relative bg-[#F8FAFC] map-print-wrapper">
           
+          {/* FLOATING SIZING CONTROL PANEL (TACTICAL DYNAMIC COCKPIT WITH ADJUSTABLE RANGE SLIDERS) */}
+          {isAdjustmentPanelOpen && (
+            <div className="absolute top-4 right-4 z-[1100] w-80 bg-slate-900/95 backdrop-blur-md border border-slate-705 rounded-xl shadow-2xl p-4 text-white font-sans max-h-[80vh] overflow-y-auto select-none">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3 select-none">
+                <div className="flex items-center gap-1.5 font-mono">
+                  <span className="h-2 w-2 bg-emerald-400 rounded-full inline-block animate-pulse"></span>
+                  <span className="text-[10.5px] font-black uppercase tracking-wider text-slate-200">
+                    Sizing Sliders Console
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setHeaderScale(1.0);
+                      setDisclaimerScale(1.0);
+                      setTimelineHeight(140);
+                      setMapOpacity(100);
+                      setLegendScale(1.0);
+                      setSidebarWidth(350);
+                      setFiltersHeightPercent(50);
+                      setDrawerWidth(380);
+                    }}
+                    title="Reset all dimension parameters to default dimensions"
+                    className="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded transition-colors cursor-pointer text-[9px] font-mono flex items-center gap-1 uppercase font-bold"
+                  >
+                    Reset
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => setIsAdjustmentPanelOpen(false)}
+                    className="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded transition-colors cursor-pointer"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-4 text-xs">
+                {/* 1. Header Scale Slider */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-mono text-slate-300">
+                    <span className="font-semibold uppercase tracking-wider text-slate-400">Header Scale</span>
+                    <span className="text-emerald-400 font-extrabold">{(headerScale * 100).toFixed(0)}%</span>
+                  </div>
+                  <input 
+                    type="range"
+                    min="0.7"
+                    max="1.4"
+                    step="0.05"
+                    value={headerScale}
+                    onChange={(e) => setHeaderScale(parseFloat(e.target.value))}
+                    className="w-full accent-blue-500 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[9px] text-slate-500 font-mono">
+                    <span>Compact (70%)</span>
+                    <span>100%</span>
+                    <span>Large (140%)</span>
+                  </div>
+                </div>
+
+                {/* 2. Notice Banner Scale Slider */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-mono text-slate-300">
+                    <span className="font-semibold uppercase tracking-wider text-slate-400">Disclaimer Scale</span>
+                    <span className="text-emerald-400 font-extrabold">{(disclaimerScale * 100).toFixed(0)}%</span>
+                  </div>
+                  <input 
+                    type="range"
+                    min="0.6"
+                    max="1.4"
+                    step="0.05"
+                    value={disclaimerScale}
+                    onChange={(e) => setDisclaimerScale(parseFloat(e.target.value))}
+                    className="w-full accent-blue-500 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[9px] text-slate-500 font-mono">
+                    <span>Small (60%)</span>
+                    <span>100%</span>
+                    <span>Large (140%)</span>
+                  </div>
+                </div>
+
+                {/* 3. Sidebar Width Slider */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-mono text-slate-300">
+                    <span className="font-semibold uppercase tracking-wider text-slate-400">Sidebar Width</span>
+                    <span className="text-emerald-400 font-extrabold">{sidebarWidth}px</span>
+                  </div>
+                  <input 
+                    type="range"
+                    min="180"
+                    max="600"
+                    step="5"
+                    value={sidebarWidth}
+                    onChange={(e) => setSidebarWidth(parseInt(e.target.value, 10))}
+                    className="w-full accent-blue-500 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[9px] text-slate-500 font-mono">
+                    <span>Compact (180px)</span>
+                    <span>Wide (600px)</span>
+                  </div>
+                </div>
+
+                {/* 4. Split Proportion Slider */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-mono text-slate-300">
+                    <span className="font-semibold uppercase tracking-wider text-slate-400">Feed vertical split</span>
+                    <span className="text-emerald-400 font-extrabold">{filtersHeightPercent.toFixed(0)}%</span>
+                  </div>
+                  <input 
+                    type="range"
+                    min="15"
+                    max="85"
+                    step="1"
+                    value={filtersHeightPercent}
+                    onChange={(e) => setFiltersHeightPercent(parseInt(e.target.value, 10))}
+                    className="w-full accent-blue-500 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[9px] text-slate-500 font-mono">
+                    <span>15% (Short filter)</span>
+                    <span>85% (Tall filter)</span>
+                  </div>
+                </div>
+
+                {/* 5. Detail Drawer Width Slider */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-mono text-slate-300">
+                    <span className="font-semibold uppercase tracking-wider text-slate-400">Detail Sheet Width</span>
+                    <span className="text-emerald-400 font-extrabold">{drawerWidth}px</span>
+                  </div>
+                  <input 
+                    type="range"
+                    min="260"
+                    max="800"
+                    step="10"
+                    value={drawerWidth}
+                    onChange={(e) => setDrawerWidth(parseInt(e.target.value, 10))}
+                    className="w-full accent-blue-500 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[9px] text-slate-500 font-mono">
+                    <span>260px</span>
+                    <span>800px</span>
+                  </div>
+                </div>
+
+                {/* 6. Timeline Height Slider */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-mono text-slate-300">
+                    <span className="font-semibold uppercase tracking-wider text-slate-400">Timeline Height</span>
+                    <span className="text-emerald-400 font-extrabold">{timelineHeight}px</span>
+                  </div>
+                  <input 
+                    type="range"
+                    min="70"
+                    max="280"
+                    step="5"
+                    value={timelineHeight}
+                    onChange={(e) => setTimelineHeight(parseInt(e.target.value, 10))}
+                    className="w-full accent-blue-500 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[9px] text-slate-500 font-mono">
+                    <span>70px</span>
+                    <span>280px</span>
+                  </div>
+                </div>
+
+                {/* 7. Map Opacity Slider */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-mono text-slate-300">
+                    <span className="font-semibold uppercase tracking-wider text-slate-400">Map Base Opacity</span>
+                    <span className="text-emerald-400 font-extrabold">{mapOpacity}%</span>
+                  </div>
+                  <input 
+                    type="range"
+                    min="20"
+                    max="100"
+                    step="5"
+                    value={mapOpacity}
+                    onChange={(e) => setMapOpacity(parseInt(e.target.value, 10))}
+                    className="w-full accent-blue-500 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[9px] text-slate-500 font-mono">
+                    <span>Translucent (20%)</span>
+                    <span>Opaque (100%)</span>
+                  </div>
+                </div>
+
+                {/* 8. Map Legend Scale Slider */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-mono text-slate-300">
+                    <span className="font-semibold uppercase tracking-wider text-slate-400">Map Legend Scale</span>
+                    <span className="text-emerald-400 font-extrabold">{(legendScale * 100).toFixed(0)}%</span>
+                  </div>
+                  <input 
+                    type="range"
+                    min="0.7"
+                    max="1.3"
+                    step="0.05"
+                    value={legendScale}
+                    onChange={(e) => setLegendScale(parseFloat(e.target.value))}
+                    className="w-full accent-blue-500 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[9px] text-slate-500 font-mono">
+                    <span>Compact (70%)</span>
+                    <span>Standard</span>
+                    <span>Wide (130%)</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Dynamic Map view overlaying incident pins */}
-          <div className="flex-1 h-full w-full relative z-0">
+          <div 
+            id="map-container"
+            style={{ opacity: mapOpacity / 100 }}
+            className="flex-1 h-full w-full relative z-0 transition-opacity duration-150"
+          >
             <IncidentMap
               events={filteredEvents}
               selectedEvent={selectedEvent}
@@ -1193,38 +2143,183 @@ export default function App() {
               heatmapOpacity={heatmapOpacity}
               onToggleOpacity={handleToggleHeatmapOpacity}
               mapCenter={activeCityCoords}
+              mapStyle={mapStyle}
+              setMapStyle={setMapStyle}
+              showPins={showPins}
+              setShowPins={setShowPins}
+              useWebGLHeatmap={useWebGLHeatmap}
+              setUseWebGLHeatmap={setUseWebGLHeatmap}
+              customPins={customPins}
+              setCustomPins={setCustomPins}
+              heatmapRadiusMultiplier={heatmapRadiusMultiplier}
+              setHeatmapRadiusMultiplier={setHeatmapRadiusMultiplier}
+              onMapUpdate={(zoom, lat, lng) => {
+                setMapZoom(zoom);
+                setMapCenterCoords({ lat, lng });
+              }}
             />
+
+            {/* Absolute-positioned semi-transparent real-time info panel inside #map-container */}
+            <div 
+              className={`absolute bottom-4 right-4 z-[400] backdrop-blur-[4px] border rounded-lg px-3 py-1.5 text-xs font-mono shadow-lg select-none flex items-center gap-3 print-hidden transition-all duration-200 ${
+                mapStyle === "streets"
+                  ? "bg-white/60 border-slate-200 text-slate-800 shadow-slate-100"
+                  : "bg-slate-900/60 border-slate-700 text-slate-200 shadow-black/40"
+              }`}
+            >
+              <div className="flex items-center gap-1.5">
+                <span className="font-bold opacity-60 uppercase text-[9px]">ZOOM:</span>
+                <span className={`font-black px-1.5 py-0.5 rounded leading-none text-[11px] ${
+                  mapStyle === "streets" ? "bg-slate-100 text-slate-900 border border-slate-200" : "bg-slate-800 text-slate-100 border border-slate-700"
+                }`}>{mapZoom}</span>
+              </div>
+              <span className="opacity-30">|</span>
+              <div className="flex items-center gap-1.5">
+                <span className="font-bold opacity-60 uppercase text-[9px]">COORDINATES:</span>
+                <span className="font-semibold">{mapCenterCoords.lat.toFixed(4)}°, {mapCenterCoords.lng.toFixed(4)}°</span>
+              </div>
+            </div>
           </div>
 
-          <div className="border-t border-slate-200 shrink-0 z-10 print-hidden p-3 bg-[#F8FAFC]">
-            <IncidentTimeline events={filteredEvents} />
+          <div 
+            style={{ height: `${isTimelineCollapsed ? 0 : timelineHeight}px` }}
+            className={`border-t border-slate-200 shrink-0 z-10 print-hidden bg-[#F8FAFC] select-none relative ${
+              isDraggingTimeline ? "" : "transition-all duration-300"
+            }`}
+          >
+            {/* Horizontal Resizer Handle Edge for Timeline */}
+            <div
+              onMouseDown={handleTimelineResizeStart}
+              className={`absolute top-0 left-0 right-0 h-4 -mt-2 cursor-row-resize z-[1001] bg-transparent flex items-center justify-center group select-none ${
+                isDraggingTimeline ? "bg-blue-500/5" : ""
+              }`}
+              title={isTimelineCollapsed ? "Click or drag up to restore Timeline" : "Drag up or down to resize timeline height / Click to collapse"}
+            >
+              {/* Thin horizontal line that lights up */}
+              <div className={`h-0.5 w-full border-b border-dashed transition-all ${
+                isDraggingTimeline 
+                  ? "border-blue-650 bg-blue-650 scale-y-125 opacity-100" 
+                  : "border-slate-300 hover:border-blue-400 group-hover:border-blue-500 group-hover:scale-y-110 opacity-75 group-hover:opacity-100"
+              }`} />
+              
+              {/* Grip Handle Indicator Capsule */}
+              <div 
+                className={`absolute h-4 w-12 rounded-full border shadow-sm transition-all flex gap-1 items-center justify-center cursor-pointer ${
+                  isDraggingTimeline 
+                    ? "bg-slate-900 border-slate-800 text-white scale-110" 
+                    : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-800 hover:scale-105"
+                }`}
+              >
+                {isTimelineCollapsed ? (
+                  <ChevronUp size={10} className="font-bold stroke-[3]" />
+                ) : (
+                  <ChevronDown size={10} className="font-bold stroke-[3]" />
+                )}
+                <div className="flex gap-0.5">
+                  <div className="w-1 h-1 rounded-full bg-slate-300 group-hover:bg-slate-500" />
+                  <div className="w-1 h-1 rounded-full bg-slate-300 group-hover:bg-slate-500" />
+                </div>
+              </div>
+            </div>
+
+            <div style={isTimelineCollapsed ? { display: "none" } : {}} className="w-full h-full p-2.5 overflow-y-auto">
+              <IncidentTimeline events={filteredEvents} />
+            </div>
           </div>
 
           {/* Informative Legend footer panel wrapper */}
-          <div className="p-3 bg-[#F8FAFC] border-t border-slate-200 shrink-0 z-10 print-hidden">
+          <div 
+            style={{ 
+              transform: `scale(${legendScale})`, 
+              transformOrigin: "bottom left",
+              width: `${100 / legendScale}%`
+            }}
+            className="p-3 bg-[#F8FAFC] border-t border-slate-200 shrink-0 z-10 print-hidden transition-transform duration-150"
+          >
             <MapLegend 
               onShowHelp={() => setShowHelpGuide(true)} 
               showHeatmap={showHeatmap}
               onToggleHeatmap={() => setShowHeatmap(!showHeatmap)}
               heatmapOpacity={heatmapOpacity}
               onToggleOpacity={handleToggleHeatmapOpacity}
+              setHeatmapOpacity={setHeatmapOpacity}
+              mapStyle={mapStyle}
+              setMapStyle={setMapStyle}
+              showPins={showPins}
+              setShowPins={setShowPins}
+              useWebGLHeatmap={useWebGLHeatmap}
+              setUseWebGLHeatmap={setUseWebGLHeatmap}
             />
           </div>
         </div>
 
         {/* Right Sandbox Slider Panel: Details Sheet Drawer */}
-        {selectedEvent && (
-          <div className="absolute md:relative inset-y-0 right-0 z-[1000] h-full shadow-2xl transition-all duration-300 print-hidden">
-            <EventDrawer
-              selectedEvent={selectedEvent}
-              onClose={() => setSelectedEvent(null)}
-              isBookmarked={bookmarks.includes(selectedEvent.id)}
-              onToggleBookmark={handleToggleBookmark}
-              bookmarkNote={bookmarkNotes[selectedEvent.id] || ""}
-              onUpdateBookmarkNote={handleUpdateBookmarkNote}
-            />
-          </div>
-        )}
+        <AnimatePresence>
+          {selectedEvent && (
+            <motion.div 
+              initial={{ x: "100%", opacity: 0.9 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: "100%", opacity: 0.9 }}
+              transition={{ type: "spring", damping: 26, stiffness: 220 }}
+              style={{
+                width: isDrawerCollapsed ? "0px" : `${drawerWidth}px`,
+                minWidth: isDrawerCollapsed ? "0px" : `${drawerWidth}px`,
+              }}
+              className={`absolute md:relative inset-y-0 right-0 z-[1000] h-full shadow-2xl print-hidden relative ${
+                isDraggingDrawer ? "" : "transition-all duration-300"
+              }`}
+            >
+              {/* Drawer left resize handle */}
+              <div
+                onMouseDown={handleDrawerResizeStart}
+                className={`absolute top-0 w-4 h-full cursor-col-resize z-[1001] bg-transparent flex items-center justify-center group select-none ${
+                  isDraggingDrawer ? "bg-blue-500/5" : ""
+                }`}
+                style={isDrawerCollapsed ? { right: 0 } : { left: "-8px" }}
+                title={isDrawerCollapsed ? "Click or drag left to restore details sheet" : "Drag left or right with your cursor to resize details sheet / Click to collapse"}
+              >
+                {/* Thin vertical line that lights up */}
+                <div className={`w-0.5 h-full border-l border-dashed transition-all ${
+                  isDraggingDrawer
+                    ? "border-blue-650 bg-blue-650 scale-x-125 opacity-100"
+                    : "border-slate-300 hover:border-blue-400 group-hover:border-blue-500 group-hover:scale-x-110 opacity-75 group-hover:opacity-100"
+                }`} />
+                
+                {/* Grip Handle Indicator Capsule */}
+                <div 
+                  className={`absolute w-5 h-12 rounded-full border shadow-md transition-all flex flex-col gap-1 items-center justify-center cursor-pointer ${
+                    isDraggingDrawer
+                      ? "bg-slate-900 border-slate-800 text-white scale-110"
+                      : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-800 hover:scale-105"
+                  }`}
+                  style={{ top: "calc(50% - 24px)" }}
+                >
+                  {isDrawerCollapsed ? (
+                    <ChevronLeft size={10} className="font-bold stroke-[3]" />
+                  ) : (
+                    <ChevronRight size={10} className="font-bold stroke-[3]" />
+                  )}
+                  <div className="flex flex-col gap-0.5">
+                    <div className="w-1 h-1 rounded-full bg-slate-300 group-hover:bg-slate-500" />
+                    <div className="w-1 h-1 rounded-full bg-slate-300 group-hover:bg-slate-500" />
+                  </div>
+                </div>
+              </div>
+              <div style={isDrawerCollapsed ? { display: "none" } : {}} className="flex-1 flex flex-col h-full overflow-hidden">
+                <EventDrawer
+                  selectedEvent={selectedEvent}
+                  onClose={() => setSelectedEvent(null)}
+                  isBookmarked={bookmarks.includes(selectedEvent.id)}
+                  onToggleBookmark={handleToggleBookmark}
+                  bookmarkNote={bookmarkNotes[selectedEvent.id] || ""}
+                  onUpdateBookmarkNote={handleUpdateBookmarkNote}
+                  sizes={sizes}
+                  toggleSizing={toggleSizing}
+                />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </main>
 
       {/* Manual Safety filing report modals */}

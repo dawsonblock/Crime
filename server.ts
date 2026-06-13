@@ -1,13 +1,67 @@
 import express from "express";
 import path from "path";
 import crypto from "crypto";
+import https from "https";
 import dotenv from "dotenv";
+import { exec } from "child_process";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { EventItem, SeverityType, LocationPrecisionType, SourceType } from "./src/types";
 import { CityAdaptor } from "./CityAdaptor";
 
 dotenv.config();
+
+// Helper to fetch content bypassing SSL/TLS certificate chain verification errors
+function fetchWithSslBypass(urlStr: string, headers: Record<string, string> = {}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const request = (targetUrl: string) => {
+      const urlObj = new URL(targetUrl);
+      const options: https.RequestOptions = {
+        hostname: urlObj.hostname,
+        port: urlObj.port || 443,
+        path: urlObj.pathname + urlObj.search,
+        method: "GET",
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          ...headers,
+        },
+        rejectUnauthorized: false, // Prevents "unable to verify the first certificate" error
+      };
+
+      const req = https.request(options, (res) => {
+        // Handle potential HTTP 3xx redirects
+        if (res.statusCode && [301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+          let redirectUrl = res.headers.location;
+          if (!redirectUrl.startsWith("http")) {
+            redirectUrl = new URL(redirectUrl, targetUrl).toString();
+          }
+          request(redirectUrl);
+          return;
+        }
+
+        let data = "";
+        res.on("data", (chunk) => {
+          data += chunk;
+        });
+        res.on("end", () => {
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(data);
+          } else {
+            reject(new Error(`Failed to fetch ${targetUrl} - Status Code: ${res.statusCode}`));
+          }
+        });
+      });
+
+      req.on("error", (err) => {
+        reject(err);
+      });
+
+      req.end();
+    };
+
+    request(urlStr);
+  });
+}
 
 const app = express();
 app.use(express.json());
@@ -969,7 +1023,7 @@ function ruleBasedClassifier(title: string, summary: string): { eventType: strin
   };
 }
 
-// Core OpenStreetMap Nominatim Geocoding Integration with privacy protection features
+// Core Geocoding Integration (Nominatim and Mapbox) with privacy protection features
 async function geocodeLocation(addressText: string, sourceKey: string): Promise<{
   latitude: number;
   longitude: number;
@@ -982,7 +1036,7 @@ async function geocodeLocation(addressText: string, sourceKey: string): Promise<
   const lowerAddress = addressText.toLowerCase();
 
   // Inspect semantic indicators from addressText to assign early precision assessment
-  if (lowerAddress.includes("&") || lowerAddress.includes(" and ") || lowerAddress.includes(" at ") || lowerAddress.includes("near")) {
+  if (lowerAddress.includes("&") || lowerAddress.includes(" and ") || lowerAddress.includes(" at ") || lowerAddress.includes("near") || lowerAddress.includes(" / ")) {
     determinedPrecision = "intersection";
   } else if (lowerAddress.includes("block of") || lowerAddress.includes("block")) {
     determinedPrecision = "block";
@@ -1010,37 +1064,71 @@ async function geocodeLocation(addressText: string, sourceKey: string): Promise<
   let conf = 0.50;
   let successGeocoding = false;
 
-  try {
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`;
-    console.log(`[Geocoding API] Contacting Nominatim OpenStreetMap for: "${query}"`);
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "SaskatoonSafetyMap/2.0 (BlockDawson@gmail.com)"
-      }
-    });
+  const mapboxToken = process.env.MAPBOX_ACCESS_TOKEN;
 
-    if (response.ok) {
-      const data = await response.json();
-      if (Array.isArray(data) && data.length > 0) {
-        const result = data[0];
-        lat = parseFloat(result.lat);
-        lng = parseFloat(result.lon);
-        
-        const importance = result.importance ? parseFloat(result.importance) : 0.5;
-        conf = Math.round((0.5 + 0.5 * importance) * 100) / 100;
-        successGeocoding = true;
-        console.log(`[Geocoding API] Successful coordinates match: ${lat}, ${lng} (Confidence: ${conf})`);
-
-        if (result.type === "house" || result._type === "house" || result.class === "place" && result.type === "house") {
-          determinedPrecision = "exact";
+  if (mapboxToken) {
+    try {
+      console.log(`[Geocoding API] Contacting Mapbox Geocoding API for: "${query}"`);
+      const mapboxUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${mapboxToken}&limit=1`;
+      const response = await fetch(mapboxUrl);
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.features && data.features.length > 0) {
+          const feature = data.features[0];
+          lng = feature.center[0];
+          lat = feature.center[1];
+          conf = feature.relevance ? Math.round(feature.relevance * 100) / 100 : 0.85;
+          successGeocoding = true;
+          console.log(`[Geocoding API] Mapbox successful match: ${lat}, ${lng} (Confidence: ${conf})`);
+          
+          if (feature.place_type && feature.place_type.includes("address")) {
+            determinedPrecision = "exact";
+          } else if (feature.place_type && feature.place_type.includes("neighborhood")) {
+            determinedPrecision = "neighbourhood";
+          } else if (feature.place_type && feature.place_type.includes("place")) {
+            determinedPrecision = "city";
+          }
         }
       }
+    } catch (err) {
+      console.error(`[Geocoding API] Mapbox Service connection error:`, err);
     }
-  } catch (err) {
-    console.error(`[Geocoding API] Service connection error:`, err);
   }
 
-  // Fallback coordinates lookup if Nominatim was unreachable or returned empty array
+  // Fallback to Nominatim if Mapbox is not present or failed
+  if (!successGeocoding) {
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`;
+      console.log(`[Geocoding API] Contacting Nominatim OpenStreetMap for: "${query}"`);
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": "SaskatoonSafetyMap/2.0 (BlockDawson@gmail.com)"
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data) && data.length > 0) {
+          const result = data[0];
+          lat = parseFloat(result.lat);
+          lng = parseFloat(result.lon);
+          
+          const importance = result.importance ? parseFloat(result.importance) : 0.5;
+          conf = Math.round((0.5 + 0.5 * importance) * 100) / 100;
+          successGeocoding = true;
+          console.log(`[Geocoding API] Nominatim successful coordinates match: ${lat}, ${lng} (Confidence: ${conf})`);
+
+          if (result.type === "house" || result._type === "house" || (result.class === "place" && result.type === "house")) {
+            determinedPrecision = "exact";
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`[Geocoding API] Nominatim Service connection error:`, err);
+    }
+  }
+
+  // Fallback coordinates lookup if Nominatim/Mapbox were unreachable or returned empty array
   if (!successGeocoding) {
     const localCoords = resolveSaskatoonCoordinates(addressText);
     lat = localCoords.lat;
@@ -1068,13 +1156,22 @@ async function geocodeLocation(addressText: string, sourceKey: string): Promise<
     } else {
       finalLocationText = addressText + " (Block-Level Approximation)";
     }
-    
-    // Approximate coordinate points to block-level precision by rounding them to 3 decimal places (~110m accuracy)
+    determinedPrecision = "block";
+  }
+
+  // Handle precision-specific generalized rounding for coordinates to protect individual privacy
+  if (determinedPrecision === "block" || determinedPrecision === "intersection") {
+    // Round to 3 decimal places (~110m accuracy)
     lat = Math.round(lat * 1000) / 1000;
     lng = Math.round(lng * 1000) / 1000;
-    determinedPrecision = "block";
-    conf = Math.min(conf, 0.85);
-    console.log(`[Geocoding Privacy] Masked address to "${finalLocationText}", rounded coords to Lat: ${lat}, Lng: ${lng}`);
+  } else if (determinedPrecision === "neighbourhood") {
+    // Round to 2 decimal places (~1.1km accuracy)
+    lat = Math.round(lat * 100) / 100;
+    lng = Math.round(lng * 100) / 100;
+  } else if (determinedPrecision === "city" || determinedPrecision === "unknown") {
+    // Round to 1 decimal place (~11km accuracy)
+    lat = Math.round(lat * 10) / 10;
+    lng = Math.round(lng * 10) / 10;
   }
 
   if (determinedPrecision === "unknown") {
@@ -1128,6 +1225,13 @@ app.get("/api/events", (req, res) => {
   filtered.sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
 
   res.json(filtered);
+});
+
+// GET /api/events/python
+// Dedicated endpoint to quickly retrieve and return Python-geocoded events specifically
+app.get("/api/events/python", (req, res) => {
+  const pythonOnly = events.filter(e => e.id.startsWith("py-evt-"));
+  res.json(pythonOnly);
 });
 
 // GET /api/events/:id
@@ -1761,15 +1865,16 @@ app.post("/api/ingest/run", async (req, res) => {
     const addedList: EventItem[] = [];
 
     // Always fetch live data first
-    const [newLiveData, newNewsData, reginaNewsData, rcmpData, extraMuniData] = await Promise.all([
+    const [newLiveData, newNewsData, reginaNewsData, rcmpData, extraMuniData, pythonEvents] = await Promise.all([
       fetchSaskatoonLiveCrimeData().catch(() => []),
       fetchSaskatoonNewsFeeds().catch(() => []),
       fetchReginaNewsFeeds().catch(() => []),
       fetchSaskatchewanRCMPFeeds().catch(() => []),
       fetchOtherMunicipalFeeds().catch(() => []),
+      runPythonAdapterIngestion().catch(() => []),
     ]);
 
-    const combinedCrawl = [...newLiveData, ...newNewsData, ...reginaNewsData, ...rcmpData, ...extraMuniData];
+    const combinedCrawl = [...newLiveData, ...newNewsData, ...reginaNewsData, ...rcmpData, ...extraMuniData, ...pythonEvents];
     for (const evt of combinedCrawl) {
       if (!events.find(e => e.id === evt.id)) {
         addedList.push(evt);
@@ -2260,9 +2365,8 @@ async function fetchSaskatchewanRCMPFeeds(): Promise<EventItem[]> {
   const rcmpEvents: EventItem[] = [];
   try {
     console.log("[Data Sync] Fetching Saskatchewan RCMP news feed RSS...");
-    const res = await fetch("https://www.rcmp-grc.gc.ca/en/rss/39", { headers: { 'User-Agent': 'Mozilla/5.0' } });
-    if (res.ok) {
-      const xmlText = await res.text();
+    const xmlText = await fetchWithSslBypass("https://www.rcmp-grc.gc.ca/en/rss/39", { 'User-Agent': 'Mozilla/5.0' });
+    if (xmlText) {
       const items = xmlText.split('<item>').slice(1).map(i => {
         const titleMatch = i.match(/<title>(.*?)<\/title>/) || i.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/);
         const linkMatch = i.match(/<link>(.*?)<\/link>/);
@@ -2402,6 +2506,50 @@ async function fetchOtherMunicipalFeeds(): Promise<EventItem[]> {
   return newsEvents;
 }
 
+// Node-Python execution bridge function
+function runPythonAdapterIngestion(): Promise<EventItem[]> {
+  return new Promise((resolve) => {
+    console.log("[Python Bridge] Executing Python adapters (main.py)...");
+    const pyDir = path.join(process.cwd(), "python_adapters");
+    
+    // Execute main.py, wait for it to scrape, classify, geocode and build the database
+    exec("python3 main.py", { cwd: pyDir }, (error, stdout, stderr) => {
+      if (error) {
+        console.error(`[Python Bridge Error] Ingestion script execution failed: ${error.message}`);
+        console.error(stderr);
+      } else {
+        console.log(`[Python Bridge] Ingestion process completed. Output:\n${stdout}`);
+      }
+      
+      // Execute export_json.py to retrieve geocoded database rows in clean JSON
+      exec("python3 export_json.py", { cwd: pyDir }, (exportError, exportStdout, exportStderr) => {
+        if (exportError) {
+          console.error(`[Python Bridge Error] Export script execution failed: ${exportError.message}`);
+          console.error(exportStderr);
+          resolve([]);
+          return;
+        }
+        
+        try {
+          const rawEvents = JSON.parse(exportStdout);
+          // Apply fallback Unsplash safety images based on classified eventType
+          const mappedEvents: EventItem[] = rawEvents.map((e: any) => ({
+            ...e,
+            imageUrls: getEventImagesByType(e.eventType),
+            createdAt: e.createdAt || new Date().toISOString()
+          }));
+          console.log(`[Python Bridge] Successfully loaded ${mappedEvents.length} geocoded events from Python.`);
+          resolve(mappedEvents);
+        } catch (parseErr: any) {
+          console.error(`[Python Bridge Error] Failed to parse JSON output: ${parseErr.message}`);
+          console.error(`Raw export output was: ${exportStdout}`);
+          resolve([]);
+        }
+      });
+    });
+  });
+}
+
 // Start listening and serve client files using Vite’s middleware mode
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
@@ -2429,15 +2577,16 @@ async function startServer() {
   (async () => {
     try {
       console.log("[Startup] Loading Saskatchewan-wide live crime and RCMP news data in background...");
-      const [liveSaskatoon, newsSaskatoon, newsRegina, rcmpData, extraMuniData] = await Promise.all([
+      const [liveSaskatoon, newsSaskatoon, newsRegina, rcmpData, extraMuniData, pythonEvents] = await Promise.all([
         fetchSaskatoonLiveCrimeData().catch(() => []),
         fetchSaskatoonNewsFeeds().catch(() => []),
         fetchReginaNewsFeeds().catch(() => []),
         fetchSaskatchewanRCMPFeeds().catch(() => []),
         fetchOtherMunicipalFeeds().catch(() => []),
+        runPythonAdapterIngestion().catch(() => []),
       ]);
       
-      const combined = [...liveSaskatoon, ...newsSaskatoon, ...newsRegina, ...rcmpData, ...extraMuniData];
+      const combined = [...liveSaskatoon, ...newsSaskatoon, ...newsRegina, ...rcmpData, ...extraMuniData, ...pythonEvents];
       const newItems = combined.filter(newItem => {
         return !events.some(existing => existing.id === newItem.id || existing.sourceHash === newItem.sourceHash);
       });

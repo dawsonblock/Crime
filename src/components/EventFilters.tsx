@@ -22,13 +22,14 @@ function getDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number) {
 export interface FilterState {
   timeRangeHours: string; // "24", "168" (7d), "720" (30d), "all"
   severities: SeverityType[];
-  eventType: string; // "all" or specific
+  eventTypes: string[]; // multi-select categories
   sourceKey: string; // "all" or specific
   searchQuery: string;
   showBookmarksOnly: boolean;
   searchRadiusKm: number | "all"; // e.g., 1, 5, 10 or "all"
   userLat: number | null;
   userLng: number | null;
+  criticalOnly: boolean;
 }
 
 interface EventFiltersProps {
@@ -78,6 +79,16 @@ export default function EventFilters({
   allEvents = [],
   bookmarks = [],
 }: EventFiltersProps) {
+  // Compute category distribution based on allEvents
+  const categoryCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {};
+    allEvents.forEach((evt) => {
+      const type = evt.eventType || "unknown";
+      counts[type] = (counts[type] || 0) + 1;
+    });
+    return counts;
+  }, [allEvents]);
+
   // Compute severity distribution based on current filters, excluding the severity filter itself (faceted search)
   const severityDistribution = React.useMemo(() => {
     // Filter allEvents by all filters EXCEPT severity
@@ -87,8 +98,13 @@ export default function EventFilters({
         return false;
       }
 
+      // Critical Only mode check
+      if (filters.criticalOnly && evt.severity !== "critical") {
+        return false;
+      }
+
       // Incident type
-      if (filters.eventType !== "all" && evt.eventType !== filters.eventType) {
+      if (filters.eventTypes && filters.eventTypes.length > 0 && !filters.eventTypes.includes(evt.eventType)) {
         return false;
       }
 
@@ -214,8 +230,15 @@ export default function EventFilters({
     onChange({ ...filters, severities: [] });
   };
 
-  const handleTypeChange = (type: string) => {
-    onChange({ ...filters, eventType: type });
+  const handleTypeToggle = (type: string) => {
+    const isSelected = filters.eventTypes.includes(type);
+    let updated: string[];
+    if (isSelected) {
+      updated = filters.eventTypes.filter((t) => t !== type);
+    } else {
+      updated = [...filters.eventTypes, type];
+    }
+    onChange({ ...filters, eventTypes: updated });
   };
 
   const handleSourceChange = (sourceKey: string) => {
@@ -551,7 +574,7 @@ export default function EventFilters({
   };
 
   return (
-    <div className="flex flex-col h-full bg-white border-r border-slate-200 text-slate-800 w-full md:w-80 md:min-w-80 select-none overflow-hidden">
+    <div className="flex flex-col h-full bg-white text-slate-800 w-full select-none overflow-hidden">
       {/* Dynamic Sync Trigger Header */}
       <div className="p-4 border-b border-slate-100 shrink-0 space-y-3 bg-slate-50/50">
         <div className="flex items-center justify-between">
@@ -621,6 +644,29 @@ export default function EventFilters({
           </div>
           <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-white border border-slate-205 text-slate-500">
             Saved
+          </span>
+        </button>
+
+        {/* Critical Only Toggle */}
+        <button
+          id="critical-only-toggle"
+          onClick={() => onChange({ ...filters, criticalOnly: !filters.criticalOnly })}
+          className={`w-full flex items-center justify-between p-2.5 rounded border text-xs font-semibold cursor-pointer transition-all duration-150 ${
+            filters.criticalOnly
+              ? "bg-red-50 border-red-300 text-red-800 shadow-sm ring-1 ring-red-500/10"
+              : "bg-slate-50 border-slate-200 hover:bg-slate-100/70 text-slate-700"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={13} className={filters.criticalOnly ? "text-red-650 fill-red-150 animate-pulse" : "text-slate-400"} />
+            <span>Critical Incident Alerts Only</span>
+          </div>
+          <span className={`font-mono text-[9px] uppercase font-extrabold px-1.5 py-0.5 rounded border leading-none transition-colors ${
+            filters.criticalOnly
+              ? "bg-red-600 border-red-755 text-white"
+              : "bg-white border-slate-205 text-slate-500"
+          }`}>
+            {filters.criticalOnly ? "ACTIVE" : "OFF"}
           </span>
         </button>
 
@@ -926,7 +972,7 @@ export default function EventFilters({
                       {sev === "critical" && "💡 Critical"}
                       {sev === "high" && "⚠️ High"}
                       {sev === "medium" && "🔔 Medium"}
-                      {sev === "low" && "ℹs Low"}
+                      {sev === "low" && "ℹ️ Low"}
                     </span>
                   </div>
                 </label>
@@ -1033,34 +1079,70 @@ export default function EventFilters({
           </div>
         </div>
 
-        {/* Category specific filters */}
-        <div className="space-y-1.5">
-          <label className="text-[10px] uppercase font-bold tracking-widest font-mono text-slate-400 flex items-center gap-1.5">
-            <ListFilter size={11} /> incident type filter
-          </label>
-          <div className="space-y-1 bg-slate-50 border border-slate-200 rounded-lg p-2 max-h-40 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-200">
-            <button
-              onClick={() => handleTypeChange("all")}
-              className={`w-full text-left py-1 px-1.5 rounded text-xs font-semibold flex items-center justify-between transition-colors cursor-pointer ${
-                filters.eventType === "all" ? "bg-white text-blue-600 font-bold shadow-sm border border-slate-150" : "text-slate-600 hover:bg-white/50"
-              }`}
-            >
-              <span>All Incident Types</span>
-              {filters.eventType === "all" && <span className="h-1.5 w-1.5 bg-blue-600 rounded-full"></span>}
-            </button>
-            {availableTypes.map((type) => (
+        {/* Category specific filters - Dynamic Multi-Select Checkbox Group */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-[10px] uppercase font-bold tracking-widest font-mono text-slate-400 flex items-center gap-1.5">
+              <ListFilter size={11} /> Incident Category Type
+            </label>
+            <div className="flex gap-2">
               <button
-                key={type}
-                onClick={() => handleTypeChange(type)}
-                className={`w-full text-left py-1 px-1.5 rounded text-xs font-semibold flex items-center justify-between transition-colors cursor-pointer ${
-                  filters.eventType === type ? "bg-white text-blue-600 font-bold shadow-sm border border-slate-150" : "text-slate-600 hover:bg-white/50"
-                }`}
+                type="button"
+                onClick={() => onChange({ ...filters, eventTypes: [...availableTypes] })}
+                className="text-[9px] font-bold font-mono text-blue-600 hover:text-blue-800 cursor-pointer uppercase transition-colors"
+                title="Select all incident categories"
               >
-                <span>{formatTypeLabel(type)}</span>
-                {filters.eventType === type && <span className="h-1.5 w-1.5 bg-blue-600 rounded-full"></span>}
+                [All]
               </button>
-            ))}
+              <button
+                type="button"
+                onClick={() => onChange({ ...filters, eventTypes: [] })}
+                className="text-[9px] font-bold font-mono text-slate-400 hover:text-slate-600 cursor-pointer uppercase transition-colors"
+                title="Clear all incident categories"
+              >
+                [Clear]
+              </button>
+            </div>
           </div>
+          <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 max-h-56 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-250 space-y-1.5">
+            {availableTypes.length === 0 ? (
+              <div className="text-center py-4 text-[10px] text-slate-400 font-semibold bg-white rounded border border-slate-200">
+                No categories available
+              </div>
+            ) : (
+              availableTypes.map((type) => {
+                const isChecked = filters.eventTypes.includes(type);
+                const count = categoryCounts[type] || 0;
+                
+                return (
+                  <label
+                    key={type}
+                    className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded border text-xs cursor-pointer select-none transition-all duration-150 ${
+                      isChecked
+                        ? "bg-blue-50/50 text-blue-900 border-blue-200 font-semibold"
+                        : "bg-white border-slate-200 hover:bg-slate-50 text-slate-650"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => handleTypeToggle(type)}
+                      className="h-3.5 w-3.5 rounded text-blue-600 border border-slate-350 focus:ring-1 focus:ring-blue-500 cursor-pointer accent-blue-650"
+                    />
+                    <div className="flex-1 flex items-center justify-between min-w-0">
+                      <span className="truncate pr-1">{formatTypeLabel(type)}</span>
+                      <span className="text-[9px] font-mono text-slate-455 font-bold bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 shrink-0">
+                        {count} {count === 1 ? "alert" : "alerts"}
+                      </span>
+                    </div>
+                  </label>
+                );
+              })
+            )}
+          </div>
+          <p className="text-[8.5px] text-slate-400 font-sans italic leading-normal font-medium px-0.5">
+            * Check one or more boxes to isolate specific incident categories. If no boxes are checked, events from all categories are displayed.
+          </p>
         </div>
 
         {/* Publisher Sources list */}

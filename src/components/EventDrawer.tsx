@@ -1,5 +1,5 @@
 import React from "react";
-import { X, ExternalLink, Bookmark, Navigation, AlertTriangle, ShieldCheck, Calendar, MapPin, Sparkles, Camera, Eye, Radio, Compass, Shield, Activity, Clock, ChevronLeft, ChevronRight, Maximize2, Share2, Twitter, Facebook, Copy, Check, Send, Printer } from "lucide-react";
+import { X, ExternalLink, Bookmark, Navigation, AlertTriangle, ShieldCheck, Calendar, MapPin, Sparkles, Camera, Eye, Radio, Compass, Shield, Activity, Clock, ChevronLeft, ChevronRight, Maximize2, Minus, Share2, Twitter, Facebook, Copy, Check, Send, Printer } from "lucide-react";
 import { EventItem } from "../types";
 import SourceBadge from "./SourceBadge";
 
@@ -17,6 +17,8 @@ interface EventDrawerProps {
   onToggleBookmark: (eventId: string) => void;
   bookmarkNote: string;
   onUpdateBookmarkNote: (eventId: string, noteText: string) => void;
+  sizes?: any;
+  toggleSizing?: (component: string, targetSize: "normal" | "enlarge" | "minimize") => void;
 }
 
 export default function EventDrawer({
@@ -26,11 +28,18 @@ export default function EventDrawer({
   onToggleBookmark,
   bookmarkNote,
   onUpdateBookmarkNote,
+  sizes,
+  toggleSizing,
 }: EventDrawerProps) {
   if (!selectedEvent) return null;
 
   // Local state for smooth notes typing
   const [localNote, setLocalNote] = React.useState("");
+
+  // Right side adjustable sliders for local element size customization
+  const [textScale, setTextScale] = React.useState<number>(1.0);
+  const [paddingScale, setPaddingScale] = React.useState<number>(1.0);
+  const [scanDuration, setScanDuration] = React.useState<number>(4);
 
   // Tactical vicinity view states
   const [showStreetViewModal, setShowStreetViewModal] = React.useState<boolean>(false);
@@ -371,13 +380,37 @@ export default function EventDrawer({
   };
 
   return (
-    <div className="w-full md:w-96 md:min-w-96 border-l border-slate-200 bg-white text-slate-800 select-none flex flex-col h-full transform transition-transform overflow-hidden font-sans">
+    <div className="w-full h-full border-l border-slate-200 bg-white text-slate-800 select-none flex flex-col transform transition-transform overflow-hidden font-sans">
       {/* Drawer Title section */}
-      <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50 shrink-0">
+      <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50 shrink-0 select-none">
         <h3 className="font-semibold text-xs uppercase tracking-widest font-mono text-slate-400">
           Incident Details Sheet
         </h3>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 shrink-0">
+          {toggleSizing && (
+            <div className="flex items-center gap-1 mr-1 border-r border-slate-200 pr-1.5">
+              <button
+                type="button"
+                onClick={() => toggleSizing("drawer", "minimize")}
+                className="p-1 hover:bg-slate-150 text-slate-400 hover:text-slate-800 rounded cursor-pointer transition-colors"
+                title="Collapse Drawer view"
+              >
+                <Minus size={13} />
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleSizing("drawer", sizes?.drawer?.isEnlarged ? "normal" : "enlarge")}
+                className={`p-1 rounded cursor-pointer transition-all ${
+                  sizes?.drawer?.isEnlarged
+                    ? "bg-emerald-50 text-emerald-600 border border-emerald-250 animate-pulse"
+                    : "hover:bg-slate-150 text-slate-400 hover:text-slate-800"
+                }`}
+                title={sizes?.drawer?.isEnlarged ? "Standard size ↙" : "Maximize Drawer width ↗"}
+              >
+                <Maximize2 size={13} />
+              </button>
+            </div>
+          )}
           <button
             onClick={() => onToggleBookmark(selectedEvent.id)}
             className="p-1.5 hover:bg-slate-100 text-slate-500 hover:text-amber-500 rounded-md transition-colors cursor-pointer"
@@ -396,7 +429,71 @@ export default function EventDrawer({
       </div>
 
       {/* Main Drawer Body scroll space */}
-      <div className="flex-1 overflow-y-auto p-5 space-y-6 scrollbar-thin scrollbar-thumb-slate-200">
+      <div 
+        style={{ 
+          fontSize: `${13 * textScale}px`,
+          padding: `${20 * paddingScale}px`
+        }}
+        className="flex-1 overflow-y-auto space-y-6 scrollbar-thin scrollbar-thumb-slate-200 transition-all duration-150"
+      >
+        {/* RIGHT SIDE DRAWER ADAPTIVE SLIDERS DECK */}
+        <div className="bg-slate-50 hover:bg-slate-100/70 border border-slate-200/80 rounded-xl p-3.5 space-y-3 shadow-sm select-none transition-colors">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-200 text-slate-700 font-mono text-[10.5px]">
+            <div className="flex items-center gap-1.5">
+              <span className="h-1.5 w-1.5 bg-indigo-500 rounded-full animate-ping"></span>
+              <span className="font-extrabold uppercase tracking-wider text-slate-600">Drawer Sizing Console</span>
+            </div>
+            <button 
+              type="button"
+              onClick={() => {
+                setTextScale(1.0);
+                setPaddingScale(1.0);
+              }}
+              className="text-[9px] hover:text-indigo-600 font-bold uppercase transition-colors"
+            >
+              Reset
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-[10px] font-mono text-slate-550">
+            {/* 1. Text FontSize Scale Slider */}
+            <div className="space-y-1">
+              <div className="flex justify-between font-semibold text-slate-500">
+                <span>Text Scale</span>
+                <span className="text-indigo-600 font-black">{(textScale * 100).toFixed(0)}%</span>
+              </div>
+              <input
+                type="range"
+                min="0.75"
+                max="1.3"
+                step="0.05"
+                value={textScale}
+                onChange={(e) => setTextScale(parseFloat(e.target.value))}
+                className="w-full accent-indigo-600 h-1 bg-slate-200 rounded cursor-pointer appearance-none"
+                title="Slide to scale font size in the details sheet"
+              />
+            </div>
+
+            {/* 2. Padding Scale Slider */}
+            <div className="space-y-1">
+              <div className="flex justify-between font-semibold text-slate-500">
+                <span>Padding Density</span>
+                <span className="text-indigo-600 font-black">{(paddingScale * 100).toFixed(0)}%</span>
+              </div>
+              <input
+                type="range"
+                min="0.6"
+                max="1.4"
+                step="0.1"
+                value={paddingScale}
+                onChange={(e) => setPaddingScale(parseFloat(e.target.value))}
+                className="w-full accent-indigo-600 h-1 bg-slate-200 rounded cursor-pointer appearance-none"
+                title="Slide to change spacing and padding inside details card"
+              />
+            </div>
+          </div>
+        </div>
+
         {/* News Publisher indicators & Severity */}
         <div className="flex flex-wrap items-center gap-2">
           <SourceBadge
@@ -1089,7 +1186,7 @@ export default function EventDrawer({
                 {isScanning && (
                   <div 
                     className="absolute left-0 right-0 h-0.5 bg-cyan-500/15 shadow-[0_0_12px_rgba(6,182,212,0.4)] pointer-events-none z-10" 
-                    style={{ animation: "scanSweep 4s linear infinite" }}
+                    style={{ animation: `scanSweep ${scanDuration}s linear infinite` }}
                   />
                 )}
 
@@ -1195,6 +1292,25 @@ export default function EventDrawer({
                       <div className="w-3 h-3 rounded-full bg-white shadow-md transform" />
                     </button>
                   </div>
+
+                  {isScanning && (
+                    <div className="space-y-1 pt-2 border-t border-slate-850 animate-fadeIn">
+                      <div className="flex justify-between text-[9px] font-mono text-slate-300">
+                        <span>Sweep Scan Speed</span>
+                        <span className="text-blue-400">{scanDuration}s / lap</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="1"
+                        max="8"
+                        step="0.5"
+                        value={scanDuration}
+                        onChange={(e) => setScanDuration(parseFloat(e.target.value))}
+                        className="w-full h-1 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                        title="Slide to adjust blueprint radar sweep lap duration"
+                      />
+                    </div>
+                  )}
                 </div>
 
                 {/* Intelligence Analysis Block */}

@@ -3,6 +3,7 @@ import L from "leaflet";
 import { EventItem, SeverityType } from "../types";
 import { MapPin, Navigation, Eye, EyeOff, Layers, ZoomIn, Info, Ruler, X, Printer, RotateCcw, RotateCw, Camera, Download, Share2, Copy, Loader2, Check } from "lucide-react";
 import html2canvas from "html2canvas";
+import WebGLHeatmapOverlay from "./WebGLHeatmapOverlay";
 
 interface IncidentMapProps {
   events: EventItem[];
@@ -13,6 +14,39 @@ interface IncidentMapProps {
   heatmapOpacity: number;
   onToggleOpacity: () => void;
   mapCenter?: [number, number];
+  mapStyle: "dark" | "streets" | "satellite";
+  setMapStyle: (style: "dark" | "streets" | "satellite") => void;
+  showPins: boolean;
+  setShowPins: (val: boolean) => void;
+  useWebGLHeatmap: boolean;
+  setUseWebGLHeatmap: (val: boolean) => void;
+  onMapUpdate?: (zoom: number, lat: number, lng: number) => void;
+  customPins: Array<{
+    id: string;
+    latitude: number;
+    longitude: number;
+    title: string;
+    note: string;
+    severity: SeverityType;
+    createdAt: string;
+    isAlertZone?: boolean;
+    zoneType?: 'home' | 'apartment' | 'hospital' | 'travel_route' | 'custom';
+    alertRadiusMeters?: number;
+  }>;
+  setCustomPins: React.Dispatch<React.SetStateAction<Array<{
+    id: string;
+    latitude: number;
+    longitude: number;
+    title: string;
+    note: string;
+    severity: SeverityType;
+    createdAt: string;
+    isAlertZone?: boolean;
+    zoneType?: 'home' | 'apartment' | 'hospital' | 'travel_route' | 'custom';
+    alertRadiusMeters?: number;
+  }>>>;
+  heatmapRadiusMultiplier: number;
+  setHeatmapRadiusMultiplier: (val: number) => void;
 }
 
 interface ClusterItem {
@@ -24,8 +58,15 @@ interface ClusterItem {
 }
 
 // Distance-based clustering algorithm projecting coordinates in pixel-space at the current zoom level
-function getClusters(events: EventItem[], map: L.Map, zoom: number, enableClustering: boolean = true): ClusterItem[] {
-  if (!enableClustering) {
+function getClusters(
+  events: EventItem[],
+  map: L.Map,
+  zoom: number,
+  enableClustering: boolean = true,
+  distanceThresholdValue: number = 55,
+  maxClusterZoomValue: number = 14
+): ClusterItem[] {
+  if (!enableClustering || zoom >= maxClusterZoomValue) {
     return events.map((evt) => ({
       id: `item-${evt.id}`,
       isCluster: false,
@@ -36,7 +77,7 @@ function getClusters(events: EventItem[], map: L.Map, zoom: number, enableCluste
   }
 
   const clusters: ClusterItem[] = [];
-  const distanceThreshold = 55; // Pixels at current zoom level to group markers
+  const distanceThreshold = distanceThresholdValue; // Pixels at current zoom level to group markers
 
   events.forEach((evt) => {
     const latLng = L.latLng(evt.latitude, evt.longitude);
@@ -156,16 +197,68 @@ export default function IncidentMap({
   setShowHeatmap,
   heatmapOpacity,
   onToggleOpacity,
-  mapCenter
+  mapCenter,
+  mapStyle,
+  setMapStyle,
+  showPins,
+  setShowPins,
+  useWebGLHeatmap,
+  setUseWebGLHeatmap,
+  onMapUpdate,
+  customPins,
+  setCustomPins,
+  heatmapRadiusMultiplier,
+  setHeatmapRadiusMultiplier
 }: IncidentMapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
+  const onMapUpdateRef = useRef(onMapUpdate);
+
+  useEffect(() => {
+    onMapUpdateRef.current = onMapUpdate;
+  }, [onMapUpdate]);
   const markersRef = useRef<Record<string, L.Marker>>({});
   const heatCirclesRef = useRef<L.Circle[]>([]);
 
   // Local map settings
-  const [heatmapRadiusMultiplier, setHeatmapRadiusMultiplier] = useState<number>(1.0);
-  const [showPins, setShowPins] = useState<boolean>(true);
+  const [floatingPanelWidth, setFloatingPanelWidth] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem("saskatoon_floating_panel_width");
+      return saved ? parseInt(saved, 10) : 300;
+    } catch {
+      return 300;
+    }
+  });
+  const [isDraggingFloatingPanel, setIsDraggingFloatingPanel] = useState<boolean>(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("saskatoon_floating_panel_width", String(floatingPanelWidth));
+    } catch {}
+  }, [floatingPanelWidth]);
+
+  const handleFloatingPanelDragStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDraggingFloatingPanel(true);
+    const startX = e.clientX;
+    const startWidth = floatingPanelWidth;
+
+    const handleMouseMove = (mvEvent: MouseEvent) => {
+      const deltaX = startX - mvEvent.clientX;
+      const newWidth = Math.min(Math.max(startWidth + deltaX, 220), 480);
+      setFloatingPanelWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingFloatingPanel(false);
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+  };
+
   const [clusterPins, setClusterPins] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem("saskatoon_cluster_pins");
@@ -179,31 +272,35 @@ export default function IncidentMap({
     localStorage.setItem("saskatoon_cluster_pins", String(clusterPins));
   }, [clusterPins]);
 
-  const [mapStyle, setMapStyle] = useState<"dark" | "streets" | "satellite">("dark");
-  const [currentZoom, setCurrentZoom] = useState<number>(12);
-  const [mapRotation, setMapRotation] = useState<number>(0);
-
-  // Custom Pin System Fields
-  const [customPins, setCustomPins] = useState<Array<{
-    id: string;
-    latitude: number;
-    longitude: number;
-    title: string;
-    note: string;
-    severity: SeverityType;
-    createdAt: string;
-  }>>(() => {
+  const [clusterDistance, setClusterDistance] = useState<number>(() => {
     try {
-      const saved = localStorage.getItem("saskatoon_custom_pins");
-      return saved ? JSON.parse(saved) : [];
+      const saved = localStorage.getItem("saskatoon_cluster_distance");
+      return saved ? parseInt(saved, 10) : 55;
     } catch {
-      return [];
+      return 55;
+    }
+  });
+
+  const [maxClusterZoom, setMaxClusterZoom] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem("saskatoon_max_cluster_zoom");
+      return saved ? parseInt(saved, 10) : 14;
+    } catch {
+      return 14;
     }
   });
 
   useEffect(() => {
-    localStorage.setItem("saskatoon_custom_pins", JSON.stringify(customPins));
-  }, [customPins]);
+    localStorage.setItem("saskatoon_cluster_distance", String(clusterDistance));
+  }, [clusterDistance]);
+
+  useEffect(() => {
+    localStorage.setItem("saskatoon_max_cluster_zoom", String(maxClusterZoom));
+  }, [maxClusterZoom]);
+
+  const [currentZoom, setCurrentZoom] = useState<number>(12);
+  const [liveCenter, setLiveCenter] = useState<{ lat: number; lng: number }>({ lat: 52.1332, lng: -106.6700 });
+  const [mapRotation, setMapRotation] = useState<number>(0);
 
   const [isDropPinMode, setIsDropPinMode] = useState<boolean>(false);
   const [pendingPinCoords, setPendingPinCoords] = useState<{ lat: number; lng: number } | null>(null);
@@ -211,6 +308,9 @@ export default function IncidentMap({
   const [newPinTitle, setNewPinTitle] = useState<string>("");
   const [newPinNote, setNewPinNote] = useState<string>("");
   const [newPinSeverity, setNewPinSeverity] = useState<SeverityType>("medium");
+  const [newPinIsAlertZone, setNewPinIsAlertZone] = useState<boolean>(true);
+  const [newPinZoneType, setNewPinZoneType] = useState<'home' | 'apartment' | 'hospital' | 'travel_route' | 'custom'>("custom");
+  const [newPinAlertRadius, setNewPinAlertRadius] = useState<number>(1000); // default 1km
 
   // Offline Caching & Map Region Tile Management States
   const [offlineSelectedCity, setOfflineSelectedCity] = useState<string>("Saskatoon");
@@ -783,14 +883,33 @@ export default function IncidentMap({
     // Add scale indicator at bottom-left corner
     L.control.scale({ position: "bottomleft", imperial: false }).addTo(leafletMap);
 
-    // Track zoom levels for dynamic marker clustering
-    leafletMap.on("zoomend", () => {
-      setCurrentZoom(leafletMap.getZoom());
-    });
+    // Track map zoom and move in real-time for marker clustering and info panel reporting
+    const handleMapUpdate = () => {
+      const zoom = leafletMap.getZoom();
+      const center = leafletMap.getCenter();
+      setCurrentZoom(zoom);
+      setLiveCenter({ lat: center.lat, lng: center.lng });
+      if (onMapUpdateRef.current) {
+        onMapUpdateRef.current(zoom, center.lat, center.lng);
+      }
+    };
+
+    leafletMap.on("zoom", handleMapUpdate);
+    leafletMap.on("zoomend", handleMapUpdate);
+    leafletMap.on("move", handleMapUpdate);
+    leafletMap.on("moveend", handleMapUpdate);
+    leafletMap.on("viewreset", handleMapUpdate);
+
+    // Run once initially to broadcast map center and zoom values
+    handleMapUpdate();
 
     return () => {
       if (mapInstanceRef.current) {
-        mapInstanceRef.current.off("zoomend");
+        mapInstanceRef.current.off("zoom", handleMapUpdate);
+        mapInstanceRef.current.off("zoomend", handleMapUpdate);
+        mapInstanceRef.current.off("move", handleMapUpdate);
+        mapInstanceRef.current.off("moveend", handleMapUpdate);
+        mapInstanceRef.current.off("viewreset", handleMapUpdate);
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
@@ -972,7 +1091,7 @@ export default function IncidentMap({
 
     // Draw active incident pins or clusters if turned on
     if (showPins) {
-      const activeClusters = getClusters(events, map, currentZoom, clusterPins);
+      const activeClusters = getClusters(events, map, currentZoom, clusterPins, clusterDistance, maxClusterZoom);
 
       activeClusters.forEach((cluster) => {
         const coords: [number, number] = [cluster.latitude, cluster.longitude];
@@ -1042,12 +1161,88 @@ export default function IncidentMap({
 
     // Draw Custom Pins
     customPins.forEach((pin) => {
+      // 1. Resolve proper custom icon representation or styling for home/apartment/hospital/route/custom
+      let zoneTitlePrefix = "";
+      let zoneTypeLabel = "Concern Note";
+      let zoneColor = "#8b5cf6"; // Violet / default
+
+      if (pin.zoneType === "home") {
+        zoneTitlePrefix = "🏠 [Home Zone] ";
+        zoneTypeLabel = "Home Safety Zone";
+        zoneColor = "#10b981"; // Emerald
+      } else if (pin.zoneType === "apartment") {
+        zoneTitlePrefix = "🏢 [Apartment Zone] ";
+        zoneTypeLabel = "Apartment Zone";
+        zoneColor = "#06b6d4"; // Cyan
+      } else if (pin.zoneType === "hospital") {
+        zoneTitlePrefix = "🏥 [Hospital/Medical] ";
+        zoneTypeLabel = "Medical Zone";
+        zoneColor = "#f43f5e"; // Rose
+      } else if (pin.zoneType === "travel_route") {
+        zoneTitlePrefix = "🛣️ [Travel Route Stop] ";
+        zoneTypeLabel = "Travel Route Stop";
+        zoneColor = "#a855f7"; // Purple
+      }
+
       const pinObj = L.marker([pin.latitude, pin.longitude], {
         icon: createCustomPinIcon(pin.severity),
       }).addTo(map);
 
+      // Draw hollow alert circle around custom pin
+      if (pin.isAlertZone) {
+        const radMeters = pin.alertRadiusMeters || 1000;
+        const circle = L.circle([pin.latitude, pin.longitude], {
+          radius: radMeters,
+          color: zoneColor,
+          weight: 1.5,
+          dashArray: "4, 4",
+          fillColor: zoneColor,
+          fillOpacity: 0.08,
+        }).addTo(map);
+
+        // Store circle in heatCirclesRef (which gets cleared automatic on next render)
+        heatCirclesRef.current.push(circle);
+      }
+
+      // Check intersecting active alerts
+      let alertCountFraction = "";
+      if (pin.isAlertZone) {
+        let count = 0;
+        const radMeters = pin.alertRadiusMeters || 1000;
+        const pinLatLng = L.latLng(pin.latitude, pin.longitude);
+        events.forEach((evt) => {
+          const evtLatLng = L.latLng(evt.latitude, evt.longitude);
+          if (pinLatLng.distanceTo(evtLatLng) <= radMeters) {
+            count++;
+          }
+        });
+
+        let iconColor = "text-emerald-500 bg-emerald-50 border-emerald-200/50";
+        if (count > 0) {
+          iconColor = "text-rose-500 bg-rose-50 border-rose-200/50 animate-pulse";
+        }
+
+        alertCountFraction = `
+          <div class="mt-2.5 p-2 rounded-lg flex flex-col gap-1 text-[10px] border ${iconColor}">
+            <div class="flex items-center justify-between font-bold">
+              <span class="flex items-center gap-1">
+                <svg xmlns="http://www.w3.org/2500/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="shrink-0"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+                <span>${zoneTypeLabel}</span>
+              </span>
+              <span class="font-mono bg-white/65 px-1.5 py-0.5 rounded leading-none shrink-0">${radMeters >= 1000 ? (radMeters / 1000).toFixed(1) + "km" : radMeters + "m"} Radius</span>
+            </div>
+            <div class="text-[9.5px] font-black leading-tight pt-0.5 border-t border-black/5">
+              ${count === 0 
+                ? `<span class="text-emerald-700">✓ 0 active incidents nearby</span>` 
+                : `<span class="text-rose-700">🚨 ${count} incident${count > 1 ? 's' : ''} detected inside zone!</span>`
+              }
+            </div>
+          </div>
+        `;
+      }
+
       const popupHtml = `
-        <div class="p-2 min-w-[210px] font-sans">
+        <div class="p-2 min-w-[220px] font-sans">
           <div class="flex items-center gap-1.5 mb-1.5 pb-1 border-b border-slate-100">
             <span class="inline-block w-2.5 h-2.5 rounded-full ${
               pin.severity === "critical"
@@ -1056,11 +1251,12 @@ export default function IncidentMap({
                 ? "bg-purple-500 shadow-sm"
                 : "bg-indigo-500 shadow-sm"
             }"></span>
-            <h4 class="font-bold text-slate-800 text-xs m-0 leading-tight">${pin.title}</h4>
+            <h4 class="font-semibold text-slate-800 text-xs m-0 leading-tight">${zoneTitlePrefix}${pin.title}</h4>
           </div>
-          <p class="text-[11px] text-slate-600 italic bg-slate-50 border border-slate-100 rounded-md p-2 mb-2 leading-relaxed max-h-[100px] overflow-y-auto">
+          <p class="text-[11px] text-slate-600 italic bg-slate-50 border border-slate-100 rounded-md p-2 mb-1.5 leading-relaxed max-h-[100px] overflow-y-auto">
             "${pin.note || "No custom reminder note added to this marker."}"
           </p>
+          ${alertCountFraction}
           <div class="flex items-center justify-between text-[9px] text-slate-400 font-mono mt-2 pt-1 border-t border-slate-100 leading-none">
             <span>Posted ${new Date(pin.createdAt).toLocaleDateString()}</span>
             <button
@@ -1081,8 +1277,8 @@ export default function IncidentMap({
       markersRef.current[`custom-pin-${pin.id}`] = pinObj;
     });
 
-    // Draw Density heat overlay layers
-    if (showHeatmap) {
+    // Draw Density heat overlay layers (using classic SVG/Canvas if WebGL is disabled or fallback)
+    if (showHeatmap && !useWebGLHeatmap) {
       events.forEach((evt) => {
         let heatColor = "#3b82f6"; // Low
         let radius = 180;
@@ -1108,7 +1304,7 @@ export default function IncidentMap({
         heatCirclesRef.current.push(circle);
       });
     }
-  }, [events, selectedEvent, showPins, clusterPins, showHeatmap, currentZoom, heatmapRadiusMultiplier, customPins, heatmapOpacity]);
+  }, [events, selectedEvent, showPins, clusterPins, showHeatmap, currentZoom, heatmapRadiusMultiplier, customPins, heatmapOpacity, clusterDistance, maxClusterZoom, useWebGLHeatmap]);
 
   // 4. Smooth auto-centering on active select event changes
   useEffect(() => {
@@ -1184,13 +1380,22 @@ export default function IncidentMap({
     <div className="relative flex-1 h-full select-none overflow-hidden bg-[#0A0F1D]">
       {/* Container with dynamic rotation applied to map container */}
       <div 
-        className="h-full w-full outline-none transition-transform duration-500 ease-out origin-center"
+        className="h-full w-full outline-none relative transition-transform duration-500 ease-out origin-center"
         style={{ 
           transform: `rotate(${mapRotation}deg) scale(${mapRotation === 0 ? 1 : dynamicScale})` 
         }}
       >
         {/* Target canvas element */}
-        <div ref={mapContainerRef} className={`h-full w-full outline-none z-0 ${isDropPinMode ? "!cursor-crosshair" : ""}`} />
+        <div id="map-container" ref={mapContainerRef} className={`h-full w-full outline-none z-0 ${isDropPinMode ? "!cursor-crosshair" : ""}`} />
+
+        {showHeatmap && useWebGLHeatmap && (
+          <WebGLHeatmapOverlay
+            map={mapInstanceRef.current}
+            events={events}
+            opacity={heatmapOpacity}
+            radiusMultiplier={heatmapRadiusMultiplier}
+          />
+        )}
       </div>
 
       {/* Tactical Compass Orientation Widget */}
@@ -1261,8 +1466,43 @@ export default function IncidentMap({
         </div>
       </div>
 
+      {isDraggingFloatingPanel && (
+        <div 
+          className="fixed inset-0 z-[9999] select-none text-[0px]" 
+          style={{ 
+            cursor: "col-resize",
+            pointerEvents: "auto",
+            background: "transparent"
+          }}
+        >
+          Drag Active
+        </div>
+      )}
+
       {/* Floating Canvas controls */}
-      <div className="absolute top-4 right-4 z-[500] flex flex-col gap-2 print-hidden">
+      <div 
+        style={{ width: `${floatingPanelWidth}px` }}
+        className={`absolute top-4 right-4 z-[500] flex flex-col gap-2 print-hidden ${
+          isDraggingFloatingPanel ? "select-none" : "transition-all duration-200"
+        }`}
+      >
+        {/* Left Resize Handle Gutter */}
+        <div
+          onMouseDown={handleFloatingPanelDragStart}
+          className={`absolute top-0 -left-3 w-3 h-full cursor-col-resize z-[501] group flex items-center justify-center select-none ${
+            isDraggingFloatingPanel ? "bg-indigo-600/10" : "hover:bg-indigo-600/5"
+          }`}
+          title="Drag left or right with your cursor to resize these display panels"
+        >
+          <div className={`w-1 h-32 bg-slate-305 hover:bg-blue-600 rounded-full transition-all duration-150 ${
+            isDraggingFloatingPanel ? "bg-blue-600 h-48 opacity-100 scale-x-125" : "opacity-45 group-hover:opacity-100"
+          }`} />
+          {/* Subtle cursor direction indicators */}
+          <div className="hidden group-hover:flex flex-col gap-1 absolute text-[8px] text-blue-500 font-extrabold select-none pointer-events-none text-center leading-none">
+            <span>◀</span>
+            <span>▶</span>
+          </div>
+        </div>
         {/* Style selection */}
         <div className="bg-white border border-slate-200 rounded-lg p-1 shadow-sm flex gap-1">
           <button
@@ -1274,7 +1514,7 @@ export default function IncidentMap({
                 : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
             }`}
           >
-            Tactical
+            TACTICAL
           </button>
           <button
             id="map-style-streets"
@@ -1285,7 +1525,7 @@ export default function IncidentMap({
                 : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
             }`}
           >
-            Streets
+            STREETS
           </button>
           <button
             id="map-style-satellite"
@@ -1296,7 +1536,7 @@ export default function IncidentMap({
                 : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
             }`}
           >
-            Satellite
+            SATELLITE
           </button>
         </div>
 
@@ -1306,7 +1546,13 @@ export default function IncidentMap({
             Display Layers
           </div>
           <button
-            onClick={() => setShowPins(!showPins)}
+            onClick={() => {
+              const newPins = !showPins;
+              setShowPins(newPins);
+              if (newPins && showHeatmap) {
+                setShowHeatmap(false);
+              }
+            }}
             className={`cursor-pointer flex items-center justify-between gap-3 text-xs text-left px-2 py-1.5 rounded-md transition-colors border ${
               showPins
                 ? "bg-blue-50 border-blue-200/60 text-blue-700 font-semibold"
@@ -1321,25 +1567,86 @@ export default function IncidentMap({
           </button>
 
           {showPins && (
-            <button
-              onClick={() => setClusterPins(!clusterPins)}
-              className={`cursor-pointer flex items-center justify-between gap-3 text-xs text-left px-2 py-1.5 rounded-md transition-all border ${
-                clusterPins
-                  ? "bg-blue-50/50 border-blue-200/40 text-blue-700 font-medium"
-                  : "border-transparent text-slate-400 hover:text-slate-700 hover:bg-slate-50/50"
-              }`}
-              title="Group incident events within close proximity to each other into interactive clusters"
-            >
-              <div className="flex items-center gap-2 pl-3 border-l-2 border-dashed border-slate-200">
-                <Layers size={11} className={clusterPins ? "text-blue-500" : "text-slate-400"} />
-                <span className="text-[11px]">Incident Clustering</span>
-              </div>
-              {clusterPins ? <Eye size={11} className="text-blue-500" /> : <EyeOff size={11} className="text-slate-400" />}
-            </button>
+            <>
+              <button
+                onClick={() => setClusterPins(!clusterPins)}
+                className={`cursor-pointer flex items-center justify-between gap-3 text-xs text-left px-2 py-1.5 rounded-md transition-all border ${
+                  clusterPins
+                    ? "bg-blue-50/50 border-blue-200/40 text-blue-700 font-medium"
+                    : "border-transparent text-slate-400 hover:text-slate-700 hover:bg-slate-50/50"
+                }`}
+                title="Group incident events within close proximity to each other into interactive clusters"
+              >
+                <div className="flex items-center gap-2 pl-3 border-l-2 border-dashed border-slate-200">
+                  <Layers size={11} className={clusterPins ? "text-blue-500" : "text-slate-400"} />
+                  <span className="text-[11px]">Incident Clustering</span>
+                </div>
+                {clusterPins ? <Eye size={11} className="text-blue-500" /> : <EyeOff size={11} className="text-slate-400" />}
+              </button>
+
+              {clusterPins && (
+                <div className="ml-3 pl-3 border-l border-slate-150 space-y-2.5 my-1.5 animate-fadeIn">
+                  {/* Slider 1: Clustering Proximity Distance */}
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between text-[9px] text-slate-500 font-mono">
+                      <span>Proximity Radius</span>
+                      <span className="font-bold text-blue-600 bg-blue-50 px-1 rounded">
+                        {clusterDistance}px
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="15"
+                      max="120"
+                      step="5"
+                      value={clusterDistance}
+                      onChange={(e) => setClusterDistance(parseInt(e.target.value, 10))}
+                      className="w-full h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                      title="Adjust proximity distance in pixels for rendering groups"
+                    />
+                  </div>
+
+                  {/* Slider 2: Unfold Zoom Limit */}
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between text-[9px] text-slate-500 font-mono">
+                      <span>Reveal Zoom Limit</span>
+                      <span className="font-bold text-blue-600 bg-blue-50 px-1 rounded">
+                        Lv. {maxClusterZoom}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="8"
+                      max="18"
+                      step="1"
+                      value={maxClusterZoom}
+                      onChange={(e) => setMaxClusterZoom(parseInt(e.target.value, 10))}
+                      className="w-full h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                      title="Set zoom level beyond which individual event pins are fully unfolded"
+                    />
+                    <div className="flex justify-between text-[8px] text-slate-400 font-mono leading-none pt-0.5">
+                      <span>Map Zoom: {currentZoom}</span>
+                      <span className={currentZoom >= maxClusterZoom ? "text-emerald-600 font-bold" : "text-amber-600 font-semibold"}>
+                        {currentZoom >= maxClusterZoom ? "Pins Unfolded" : "Clustered"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
           )}
 
           <button
-            onClick={() => setShowHeatmap(!showHeatmap)}
+            onClick={() => {
+              const newHeat = !showHeatmap;
+              setShowHeatmap(newHeat);
+              if (newHeat) {
+                setShowPins(false);
+                setUseWebGLHeatmap(true);
+              } else {
+                setShowPins(true);
+              }
+            }}
             className={`cursor-pointer flex items-center justify-between gap-3 text-xs text-left px-2 py-1.5 rounded-md transition-colors border ${
               showHeatmap
                 ? "bg-blue-50 border-blue-200/60 text-blue-700 font-semibold"
@@ -1403,7 +1710,7 @@ export default function IncidentMap({
           <div className="text-[9px] text-slate-400 font-mono uppercase tracking-wider font-bold mb-0.5 border-b border-slate-150 pb-1 flex items-center justify-between">
             <span className="flex items-center gap-1">
               <Camera size={11} className="text-blue-500 font-bold animate-pulse" />
-              Map Snapshot Exporter
+              MAP SNAPSHOT EXPORTER
             </span>
           </div>
           <p className="text-[10px] text-slate-500 font-sans leading-relaxed">
@@ -1426,7 +1733,7 @@ export default function IncidentMap({
           <div className="text-[9px] text-slate-400 font-mono uppercase tracking-wider font-bold mb-1 border-b border-slate-150 pb-1 flex items-center justify-between">
             <span className="flex items-center gap-1">
               <Ruler size={11} className="text-blue-500 font-bold" />
-              Incident Radius Ruler
+              INCIDENT RADIUS RULER
             </span>
             {isMeasuring && (
               <span className="flex h-2 w-2 relative">
@@ -1491,14 +1798,14 @@ export default function IncidentMap({
           <div className="text-[9px] text-slate-400 font-mono uppercase tracking-wider font-bold mb-0.5 border-b border-slate-150 pb-1 flex items-center justify-between">
             <span className="flex items-center gap-1">
               <Download size={11} className="text-emerald-500 font-bold" />
-              Offline Region Tiles
+              OFFLINE REGION TILES
             </span>
             <span className={`h-1.5 w-1.5 rounded-full ${isOfflineViewActive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`} title={isOfflineViewActive ? "Cache Store Available" : "No Offline Tiles"} />
           </div>
 
           <div className="space-y-1.5">
             <label htmlFor="offline-city-select" className="text-[9.5px] font-mono tracking-wider text-slate-450 uppercase select-none">
-              Select Area Hub:
+              SELECT AREA HUB:
             </label>
             <select
               id="offline-city-select"
@@ -1623,8 +1930,8 @@ export default function IncidentMap({
         </div>
       </div>
 
-      {/* Mini warning tag */}
-      <div className="absolute bottom-4 right-4 z-[400] bg-white/95 border border-slate-200 rounded px-2.5 py-1.5 text-[9px] font-mono text-slate-500 shadow-sm flex items-center gap-1.5 print-hidden">
+      {/* Mini warning tag positioned perfectly above the bottom-right coordinate info panel */}
+      <div className="absolute bottom-[52px] right-4 z-[400] bg-white/95 border border-slate-200 rounded px-2.5 py-1.5 text-[9px] font-mono text-slate-500 shadow-sm flex items-center gap-1.5 print-hidden">
         <Info size={10} className="text-blue-500" />
         <span>Approximate incident locations display (jittered block coordinates)</span>
       </div>
@@ -1789,13 +2096,16 @@ export default function IncidentMap({
                   note: newPinNote.trim(),
                   severity: newPinSeverity,
                   createdAt: new Date().toISOString(),
+                  isAlertZone: newPinIsAlertZone,
+                  zoneType: newPinZoneType,
+                  alertRadiusMeters: newPinAlertRadius,
                 };
 
                 setCustomPins((prev) => [...prev, newPin]);
                 setIsPinModalOpen(false);
                 setPendingPinCoords(null);
               }}
-              className="p-5 space-y-4"
+              className="p-5 space-y-4 max-h-[75vh] overflow-y-auto"
             >
               {/* Coordinates display */}
               <div className="bg-slate-50 border border-slate-200 rounded p-2.5 flex items-center justify-between text-[10px] font-mono text-slate-500">
@@ -1813,12 +2123,92 @@ export default function IncidentMap({
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Danger zone, Poorly-lit alley, School safety crossing"
+                  placeholder="e.g. My Home, St. Paul's Hospital, West Travel Checkpoint"
                   value={newPinTitle}
                   onChange={(e) => setNewPinTitle(e.target.value)}
                   maxLength={60}
                   className="w-full px-3 py-2 text-xs border border-slate-305 rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent text-slate-800 shadow-sm"
                 />
+              </div>
+
+              {/* Zone Type Selection */}
+              <div className="space-y-1.5">
+                <label className="text-[10px] uppercase font-extrabold tracking-wider font-mono text-slate-400 block">
+                  Safety Zone Type
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { value: "custom", label: "Concern Pin 📍" },
+                    { value: "home", label: "My Home 🏠" },
+                    { value: "apartment", label: "Apartment 🏢" },
+                    { value: "hospital", label: "Hospital 🏥" },
+                    { value: "travel_route", label: "Travel Stop 🛣️" },
+                  ].map((x) => {
+                    const isSelected = newPinZoneType === x.value;
+                    return (
+                      <button
+                        key={x.value}
+                        type="button"
+                        onClick={() => {
+                          setNewPinZoneType(x.value as any);
+                          // Default appropriate titles
+                          if (newPinTitle === "" || newPinTitle.startsWith("My ") || newPinTitle.includes("Zone") || newPinTitle.includes("Stop") || newPinTitle.includes("Hospital")) {
+                            if (x.value === "home") setNewPinTitle("My Home Location");
+                            else if (x.value === "apartment") setNewPinTitle("My Apartment");
+                            else if (x.value === "hospital") setNewPinTitle("Saskatoon City Hospital Zone");
+                            else if (x.value === "travel_route") setNewPinTitle("Daily Commute Route Corridor");
+                            else setNewPinTitle("Custom Point of Concern");
+                          }
+                        }}
+                        className={`py-1.5 px-2 rounded-md text-[10.5px] font-bold text-left transition-all border cursor-pointer ${
+                          isSelected 
+                            ? "bg-violet-600 border-violet-650 text-white shadow-sm font-extrabold" 
+                            : "border-slate-200 text-slate-600 hover:bg-slate-100 bg-slate-50"
+                        }`}
+                      >
+                        {x.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Alert Radius Settings Option Row */}
+              <div className="p-3 bg-violet-50/50 rounded-lg border border-violet-100 space-y-3">
+                <div className="flex items-center justify-between select-none">
+                  <span className="text-[10.5px] font-bold text-slate-700">
+                    Enable Safety Alert Circle
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={newPinIsAlertZone}
+                    onChange={(e) => setNewPinIsAlertZone(e.target.checked)}
+                    className="h-4 w-4 rounded border-violet-300 text-violet-600 focus:ring-violet-500 cursor-pointer"
+                  />
+                </div>
+
+                {newPinIsAlertZone && (
+                  <div className="space-y-1.5 animate-fadeIn">
+                    <div className="flex justify-between text-[9px] font-mono font-bold text-slate-500">
+                      <span>ALERT SCAN RADIUS:</span>
+                      <span className="text-violet-700 bg-violet-50/80 border border-violet-200/50 px-1.5 rounded leading-none pt-0.5 font-bold">
+                        {newPinAlertRadius >= 1000 ? (newPinAlertRadius / 1000).toFixed(1) + " km" : newPinAlertRadius + " m"}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="200"
+                      max="4000"
+                      step="100"
+                      value={newPinAlertRadius}
+                      onChange={(e) => setNewPinAlertRadius(parseInt(e.target.value, 10))}
+                      className="w-full h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-violet-600"
+                    />
+                    <p className="text-[8.5px] text-slate-450 leading-tight">
+                      This draws a visual alert boundary centered here. The map popup will automatically monitor active Saskatoon police safety incidents inside this perimeter.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Note / Description */}
@@ -1831,7 +2221,7 @@ export default function IncidentMap({
                   value={newPinNote}
                   onChange={(e) => setNewPinNote(e.target.value)}
                   maxLength={300}
-                  rows={3}
+                  rows={2}
                   className="w-full px-3 py-2 text-xs border border-slate-305 rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent text-slate-800 shadow-sm resize-none"
                 />
               </div>
@@ -1843,9 +2233,9 @@ export default function IncidentMap({
                 </label>
                 <div className="grid grid-cols-3 gap-2">
                   {[
-                    { value: "low", label: "Low Alert", classNormal: "border-indigo-200 text-indigo-700 bg-indigo-50/30 hover:bg-indigo-50 select-none", classActive: "bg-indigo-600 border-indigo-600 text-white" },
-                    { value: "medium", label: "Warning", classNormal: "border-amber-250 text-amber-700 bg-amber-50/30 hover:bg-amber-100 select-none", classActive: "bg-amber-500 border-amber-500 text-white" },
-                    { value: "critical", label: "Critical", classNormal: "border-fuchsia-200 text-fuchsia-700 bg-fuchsia-50/30 hover:bg-fuchsia-50 select-none", classActive: "bg-fuchsia-700 border-fuchsia-700 text-white" },
+                    { value: "low", label: "Low Alert", classNormal: "border-indigo-200 text-indigo-700 bg-indigo-50/30 hover:bg-indigo-50 select-none", classActive: "bg-indigo-600 border-indigo-600 text-white font-black" },
+                    { value: "medium", label: "Warning", classNormal: "border-amber-250 text-amber-700 bg-amber-50/30 hover:bg-amber-100 select-none", classActive: "bg-amber-500 border-amber-500 text-white font-black" },
+                    { value: "critical", label: "Critical", classNormal: "border-fuchsia-200 text-fuchsia-700 bg-fuchsia-50/30 hover:bg-fuchsia-50 select-none", classActive: "bg-fuchsia-700 border-fuchsia-700 text-white font-black" },
                   ].map((lvl) => {
                     const isSelected = newPinSeverity === lvl.value;
                     return (

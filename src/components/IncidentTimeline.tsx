@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { EventItem } from '../types';
 import { Clock } from 'lucide-react';
 
@@ -7,6 +7,9 @@ interface IncidentTimelineProps {
 }
 
 export default function IncidentTimeline({ events }: IncidentTimelineProps) {
+  const [timelineScale, setTimelineScale] = useState<number>(1.0);
+  const [tickInterval, setTickInterval] = useState<number>(6);
+
   const eventsByHour = useMemo(() => {
     // Map events onto a 24 hour axis
     const eventPoints: Array<{ event: EventItem; hour: number; minute: number; fractionalHour: number }> = [];
@@ -56,12 +59,47 @@ export default function IncidentTimeline({ events }: IncidentTimelineProps) {
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 shrink-0 overflow-visible">
-      <div className="flex items-center gap-2 mb-6">
-        <Clock className="w-4 h-4 text-slate-500" />
-        <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider font-mono">Incident Timeline (24h Distribution)</h3>
-        <span className="ml-auto text-[10px] font-mono bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">
-          {eventsByHour.length} events
-        </span>
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-6">
+        <div className="flex items-center gap-2 select-none">
+          <Clock className="w-4 h-4 text-slate-500" />
+          <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider font-mono">Incident Timeline (24h Distribution)</h3>
+          <span className="text-[10px] font-mono bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">
+            {eventsByHour.length} events
+          </span>
+        </div>
+
+        {/* Dynamic Sliders directly on the Bottom UI Component */}
+        <div className="sm:ml-auto flex items-center gap-3.5 flex-wrap select-none text-[10px] font-mono text-slate-500">
+          <div className="flex items-center gap-2 bg-slate-50/70 border border-slate-150 px-2.5 py-1 rounded-md shadow-inner">
+            <span className="font-bold text-slate-450 uppercase tracking-tight text-[9px]">Dot Scale:</span>
+            <input
+              type="range"
+              min="0.5"
+              max="2.0"
+              step="0.1"
+              value={timelineScale}
+              onChange={(e) => setTimelineScale(parseFloat(e.target.value))}
+              className="w-16 sm:w-20 accent-blue-500 h-1 bg-slate-200 rounded cursor-pointer appearance-none"
+              title="Slide to adjust size of incident nodes on timeline"
+            />
+            <span className="text-indigo-600 font-extrabold w-8 text-right">{(timelineScale * 100).toFixed(0)}%</span>
+          </div>
+
+          <div className="flex items-center gap-2 bg-slate-50/70 border border-slate-150 px-2.5 py-1 rounded-md shadow-inner">
+            <span className="font-bold text-slate-450 uppercase tracking-tight text-[9px]">Ticks:</span>
+            <input
+              type="range"
+              min="1"
+              max="12"
+              step="1"
+              value={tickInterval}
+              onChange={(e) => setTickInterval(parseInt(e.target.value, 10))}
+              className="w-14 sm:w-16 accent-blue-500 h-1 bg-slate-200 rounded cursor-pointer appearance-none"
+              title="Slide to adjust tick marks density"
+            />
+            <span className="text-indigo-600 font-extrabold text-right">{tickInterval}h</span>
+          </div>
+        </div>
       </div>
 
       <div className="relative h-20 w-full mt-2">
@@ -70,7 +108,7 @@ export default function IncidentTimeline({ events }: IncidentTimelineProps) {
 
         {/* Hour markers */}
         {hourMarkers.map((h, i) => (
-          h % 6 === 0 ? (
+          h % tickInterval === 0 ? (
             <div 
               key={`h-${h}`} 
               className="absolute top-1/2 -translate-y-1/2 flex flex-col items-center"
@@ -102,7 +140,7 @@ export default function IncidentTimeline({ events }: IncidentTimelineProps) {
               style={{ 
                 left: `${leftPercent}%`, 
                 top: isTop ? '30%' : '70%',
-                transform: 'translate(-50%, -50%)'
+                transform: `translate(-50%, -50%) scale(${timelineScale})`
               }}
             >
               <div className={`w-2.5 h-2.5 rounded-full border border-white outline outline-1 outline-offset-1 transition-all group-hover:scale-150 group-hover:z-50 ${getSeverityStyle(pt.event.severity)} ${getSeverityGlow(pt.event.severity)}`}></div>
