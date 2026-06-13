@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { AlertCircle, ShieldAlert, Sparkles, X, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, HelpCircle, Navigation, Info, ExternalLink, Bookmark, TrendingUp, Upload, Download, BarChart3, Wifi, WifiOff, MessageSquare, MapPin, ArrowLeftRight, Flame, Plus, Minus, Settings, Filter, Layers, Clock, Minimize2, Maximize2, Bell } from "lucide-react";
-import { EventItem, EventSource, SeverityType } from "./types";
+import { EventItem, EventSource, SeverityType, CustomRouteItem } from "./types";
 import EventFilters, { FilterState } from "./components/EventFilters";
 import IncidentMap from "./components/IncidentMap";
 import EventDrawer from "./components/EventDrawer";
@@ -88,6 +88,25 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("saskatoon_custom_pins", JSON.stringify(customPins));
   }, [customPins]);
+
+  // Lifted Custom Travel Routes State
+  const [customRoutes, setCustomRoutes] = useState<CustomRouteItem[]>(() => {
+    try {
+      const saved = localStorage.getItem("saskatoon_custom_routes");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem("saskatoon_custom_routes", JSON.stringify(customRoutes));
+  }, [customRoutes]);
+
+  // Route Sketching/Drawing state values
+  const [isDrawingRoute, setIsDrawingRoute] = useState<boolean>(false);
+  const [currentDrawnPath, setCurrentDrawnPath] = useState<Array<[number, number]>>([]);
+  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
 
   const handleToggleHeatmapOpacity = () => {
     // Opacity cycles through 0.06 (Low), 0.18 (Medium), 0.35 (High)
@@ -1750,6 +1769,14 @@ export default function App() {
                       customPins={customPins}
                       setCustomPins={setCustomPins}
                       events={events}
+                      customRoutes={customRoutes}
+                      setCustomRoutes={setCustomRoutes}
+                      isDrawingRoute={isDrawingRoute}
+                      setIsDrawingRoute={setIsDrawingRoute}
+                      currentDrawnPath={currentDrawnPath}
+                      setCurrentDrawnPath={setCurrentDrawnPath}
+                      selectedRouteId={selectedRouteId}
+                      setSelectedRouteId={setSelectedRouteId}
                       onSelectZone={(pin) => {
                         const dummyEvent = {
                           id: `custom-pin-${pin.id}`,
@@ -2153,6 +2180,14 @@ export default function App() {
               setCustomPins={setCustomPins}
               heatmapRadiusMultiplier={heatmapRadiusMultiplier}
               setHeatmapRadiusMultiplier={setHeatmapRadiusMultiplier}
+              customRoutes={customRoutes}
+              setCustomRoutes={setCustomRoutes}
+              isDrawingRoute={isDrawingRoute}
+              setIsDrawingRoute={setIsDrawingRoute}
+              currentDrawnPath={currentDrawnPath}
+              setCurrentDrawnPath={setCurrentDrawnPath}
+              selectedRouteId={selectedRouteId}
+              setSelectedRouteId={setSelectedRouteId}
               onMapUpdate={(zoom, lat, lng) => {
                 setMapZoom(zoom);
                 setMapCenterCoords({ lat, lng });

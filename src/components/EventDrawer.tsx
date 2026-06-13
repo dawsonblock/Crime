@@ -324,6 +324,35 @@ export default function EventDrawer({
     }
   };
 
+  const ThreatScoreGauge = ({ score }: { score?: number }) => {
+    if (score === undefined) return null;
+    let colorClass = "text-indigo-600";
+    let bgClass = "bg-indigo-50 border-indigo-150";
+    if (score >= 75) {
+      colorClass = "text-red-650 font-black";
+      bgClass = "bg-red-50 border-red-200 animate-pulse";
+    } else if (score >= 45) {
+      colorClass = "text-orange-550 font-extrabold";
+      bgClass = "bg-orange-50 border-orange-205";
+    } else if (score >= 20) {
+      colorClass = "text-yellow-650 font-bold";
+      bgClass = "bg-yellow-50 border-yellow-250";
+    } else {
+      colorClass = "text-slate-500 font-medium";
+      bgClass = "bg-slate-55 border-slate-205";
+    }
+    
+    return (
+      <div className={`flex items-center gap-1.5 px-2 py-0.5 border rounded-full ${bgClass} leading-none select-none`}>
+        <Activity size={10} className={colorClass} />
+        <span className="text-[9px] uppercase font-mono tracking-wider font-bold text-slate-400">Threat</span>
+        <span className={`text-[10px] font-mono leading-none font-bold ${colorClass}`}>
+          {score}%
+        </span>
+      </div>
+    );
+  };
+
   const SeverityGauge = ({ severity }: { severity: string }) => {
     const getSeverityDetails = (sev: string) => {
       switch (sev) {
@@ -502,6 +531,7 @@ export default function EventDrawer({
             sourceName={selectedEvent.sourceName}
           />
           <SeverityGauge severity={selectedEvent.severity} />
+          <ThreatScoreGauge score={selectedEvent.threatScore} />
         </div>
 
         {/* Head description title */}
@@ -722,11 +752,46 @@ export default function EventDrawer({
             <span>AI safety summary</span>
           </div>
           <div className="bg-slate-50/85 border border-slate-150 rounded-xl p-4">
-            <p className="text-xs text-slate-600 leading-relaxed font-sans font-medium">
+            <p className="text-xs text-slate-600 leading-relaxed font-sans font-medium whitespace-pre-wrap">
               {selectedEvent.summary || "No description overview compiled."}
             </p>
           </div>
         </div>
+
+        {/* Linked Intelligence Sources (Fusion Cluster details) */}
+        {selectedEvent.sourcesList && selectedEvent.sourcesList.length > 0 && (
+          <div className="space-y-2 pt-1">
+            <div className="text-[10px] uppercase font-bold tracking-wider font-mono text-slate-400 flex items-center gap-1.5">
+              <Activity size={11} className="text-emerald-500 animate-pulse" />
+              <span>Linked Intelligence Sources ({selectedEvent.sourcesList.length})</span>
+            </div>
+            <div className="bg-emerald-50/10 border border-emerald-200/50 rounded-xl p-3 space-y-2 select-none">
+              <div className="text-[9.5px] text-slate-500 font-medium leading-relaxed">
+                This safety alert is a <b>fused intelligence cluster</b> combining multiple reports of the same incident within space & time constraints:
+              </div>
+              <div className="grid grid-cols-1 gap-1.5">
+                {selectedEvent.sourcesList.map((src, sIdx) => (
+                  <a
+                    key={sIdx}
+                    href={src.url || "#"}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center justify-between text-[11px] bg-white border border-slate-150 hover:border-emerald-300 hover:shadow-xs px-2.5 py-1.5 rounded-lg text-slate-700 font-semibold transition-all group"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                      <span>{src.name}</span>
+                    </span>
+                    <span className="text-[9.5px] text-slate-400 group-hover:text-emerald-600 flex items-center gap-0.5 font-medium">
+                      View Original
+                      <ExternalLink size={9} />
+                    </span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Chronological Incident Timeline Status updates */}
         <div id="incident-timeline-section" className="space-y-3 pt-1">

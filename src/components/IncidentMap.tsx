@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import L from "leaflet";
-import { EventItem, SeverityType } from "../types";
-import { MapPin, Navigation, Eye, EyeOff, Layers, ZoomIn, Info, Ruler, X, Printer, RotateCcw, RotateCw, Camera, Download, Share2, Copy, Loader2, Check } from "lucide-react";
+import { EventItem, SeverityType, CustomRouteItem } from "../types";
+import { MapPin, Navigation, Eye, EyeOff, Layers, ZoomIn, Info, Ruler, X, Printer, RotateCcw, RotateCw, Camera, Download, Share2, Copy, Loader2, Check, Route, Waypoints } from "lucide-react";
 import html2canvas from "html2canvas";
 import WebGLHeatmapOverlay from "./WebGLHeatmapOverlay";
 
@@ -47,6 +47,15 @@ interface IncidentMapProps {
   }>>>;
   heatmapRadiusMultiplier: number;
   setHeatmapRadiusMultiplier: (val: number) => void;
+  // Custom travel route extensions
+  customRoutes?: CustomRouteItem[];
+  setCustomRoutes?: React.Dispatch<React.SetStateAction<CustomRouteItem[]>>;
+  isDrawingRoute?: boolean;
+  setIsDrawingRoute?: (val: boolean) => void;
+  currentDrawnPath?: Array<[number, number]>;
+  setCurrentDrawnPath?: React.Dispatch<React.SetStateAction<Array<[number, number]>>>;
+  selectedRouteId?: string | null;
+  setSelectedRouteId?: (val: string | null) => void;
 }
 
 interface ClusterItem {
@@ -208,7 +217,15 @@ export default function IncidentMap({
   customPins,
   setCustomPins,
   heatmapRadiusMultiplier,
-  setHeatmapRadiusMultiplier
+  setHeatmapRadiusMultiplier,
+  customRoutes,
+  setCustomRoutes,
+  isDrawingRoute,
+  setIsDrawingRoute,
+  currentDrawnPath,
+  setCurrentDrawnPath,
+  selectedRouteId,
+  setSelectedRouteId
 }: IncidentMapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -938,6 +955,29 @@ export default function IncidentMap({
     };
   }, [isDropPinMode]);
 
+  // Map click listener for custom routes drawing/sketching waypoints
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    const handleRouteMapClick = (e: L.LeafletMouseEvent) => {
+      if (isDrawingRoute) {
+        L.DomEvent.stopPropagation(e as any);
+        if (setCurrentDrawnPath) {
+          setCurrentDrawnPath(prev => [...prev, [e.latlng.lat, e.latlng.lng]]);
+        }
+      }
+    };
+
+    if (isDrawingRoute) {
+      map.on("click", handleRouteMapClick);
+    }
+    
+    return () => {
+      map.off("click", handleRouteMapClick);
+    };
+  }, [isDrawingRoute, setCurrentDrawnPath]);
+
   // 2. Map style tile switching
   useEffect(() => {
     const map = mapInstanceRef.current;
@@ -1336,6 +1376,128 @@ export default function IncidentMap({
     });
   }, [mapCenter]);
 
+  // Keep track of route layers for efficient addition and removal
+  const routeLayersRef = useRef<L.Layer[]>([]);
+
+  // 4.2 Render Custom Routes / Live sketching paths
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    // Flush previous route layers
+    routeLayersRef.current.forEach((layer) => {
+      map.removeLayer(layer);
+    });
+    routeLayersRef.current = [];
+
+    // A. Render Live Sketching Path
+    if (currentDrawnPath && currentDrawnPath.length > 0) {
+      if (currentDrawnPath.length >= 2) {
+        const polyline = L.polyline(currentDrawnPath, {
+          color: "#ea580c", // Amber line
+          weight: 4,
+          opacity: 0.85,
+          dashArray: "6, 6"
+        }).addTo(map);
+        routeLayersRef.current.push(polyline);
+      }
+
+      currentDrawnPath.forEach((pt, idx) => {
+        const vertexIcon = L.divIcon({
+          className: "route-vertex-node",
+          html: `
+            <div class="relative flex items-center justify-center">
+              <span class="absolute inline-flex h-4.5 w-4.5 bg-amber-450 rounded-full opacity-65 animate-ping"></span>
+              <span class="relative flex h-4.5 w-4.5 rounded-full bg-amber-600 border border-white text-[9.5px] font-black font-mono text-white items-center justify-center shadow-md pb-[0.5px]">${idx + 1}</span>
+            </div>
+          `,
+          iconSize: [18, 18],
+          iconAnchor: [9, 9]
+        });
+
+        const marker = L.marker(pt, { icon: vertexIcon, zIndexOffset: 3000 }).addTo(map);
+        routeLayersRef.current.push(marker);
+      });
+    }
+
+    // B. Render Saved Custom Routes
+    if (customRoutes) {
+      customRoutes.forEach((route) => {
+        const isSelected = selectedRouteId === route.id;
+        const isActive = route.isActive !== false;
+
+        if (route.path.length >= 2) {
+          // 1. Draw perimeter corridor ribbon (safety perimeter warning buffer)
+          const ribbonColor = isSelected ? "#818cf8" : "#94a3b8";
+          const ribbon = L.polyline(route.path, {
+            color: ribbonColor,
+            weight: 35, // Represents the 1km wide total corridor
+            opacity: isSelected ? 0.22 : 0.08,
+            lineCap: "round",
+            lineJoin: "round"
+          }).addTo(map);
+          routeLayersRef.current.push(ribbon);
+
+          // 2. Draw actual flow trajectory line
+          const color = isSelected ? "#4f46e5" : !isActive ? "#94a3b8" : "#8b5cf6";
+          const flowLine = L.polyline(route.path, {
+            color,
+            weight: isSelected ? 5.5 : 3.5,
+            opacity: isSelected ? 0.95 : 0.7,
+            lineCap: "round",
+            lineJoin: "round"
+          }).addTo(map);
+
+          flowLine.bindTooltip(`
+            <div class="p-1 px-1.5 font-sans leading-tight">
+              <div class="font-extrabold text-[11px] text-slate-800 leading-none">${route.title}</div>
+              <div class="text-[9.5px] text-slate-500 font-mono mt-0.5">${route.note || "Guarded Safety Corridor"}</div>
+            </div>
+          `, { permanent: false, direction: "top", opacity: 0.9 });
+
+          flowLine.addTo(map);
+          routeLayersRef.current.push(flowLine);
+
+          // Add simple marker flags for start and finish on the map
+          const startIcon = L.divIcon({
+            html: `<div class="w-3.5 h-3.5 rounded-full bg-emerald-600 border border-white shadow-sm flex items-center justify-center font-mono text-[7px] font-black text-white">S</div>`,
+            iconSize: [14, 14],
+            iconAnchor: [7, 7]
+          });
+          const endIcon = L.divIcon({
+            html: `<div class="w-3.5 h-3.5 rounded-full bg-rose-600 border border-white shadow-sm flex items-center justify-center font-mono text-[7px] font-black text-white">E</div>`,
+            iconSize: [14, 14],
+            iconAnchor: [7, 7]
+          });
+
+          const startMarker = L.marker(route.path[0], { icon: startIcon }).addTo(map);
+          const endMarker = L.marker(route.path[route.path.length - 1], { icon: endIcon }).addTo(map);
+          
+          routeLayersRef.current.push(startMarker);
+          routeLayersRef.current.push(endMarker);
+        }
+      });
+    }
+
+  }, [currentDrawnPath, customRoutes, selectedRouteId, isDrawingRoute]);
+
+  // 4.3 Fit bounds when selectedRouteId is triggered
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !selectedRouteId || !customRoutes) return;
+
+    const route = customRoutes.find(r => r.id === selectedRouteId);
+    if (route && route.path.length >= 2) {
+      const poly = L.polyline(route.path);
+      map.fitBounds(poly.getBounds(), {
+        padding: [60, 60],
+        maxZoom: 15,
+        animate: true,
+        duration: 1.5
+      });
+    }
+  }, [selectedRouteId, customRoutes]);
+
   // Register popup deletion event listener for custom pins delete button
   useEffect(() => {
     const map = mapInstanceRef.current;
@@ -1397,6 +1559,34 @@ export default function IncidentMap({
           />
         )}
       </div>
+
+      {/* Live Routing Sketching Tactical Banner Overlay */}
+      {isDrawingRoute && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[1000] bg-slate-900/95 text-white p-3 rounded-2xl shadow-2xl border border-indigo-500/30 flex items-center gap-3.5 backdrop-blur-[5px] max-w-sm sm:max-w-md animate-fadeIn antialiased shrink-0 w-[92%] sm:w-auto">
+          <div className="bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg p-2 text-white shadow shadow-indigo-500/20">
+            <Route size={16} className="animate-pulse" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h4 className="font-bold text-[10px] uppercase tracking-widest text-indigo-400 font-mono leading-none flex items-center gap-1.5 select-none">
+              <span>Tactical Corridor Tracer</span>
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            </h4>
+            <div className="text-[10.5px] text-slate-200 leading-normal mt-1 font-medium select-none text-left">
+              Click sequential waypoints on Saskatoon map to trace lines. Click <b>Save & Analyze</b> in sidebar.
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              if (setIsDrawingRoute) setIsDrawingRoute(false);
+              if (setCurrentDrawnPath) setCurrentDrawnPath([]);
+            }}
+            className="p-1 hover:bg-white/10 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer shrink-0"
+            title="Exit Tracing Mode"
+          >
+            <X size={15} />
+          </button>
+        </div>
+      )}
 
       {/* Tactical Compass Orientation Widget */}
       <div className="absolute top-4 left-4 z-[500] flex flex-col items-center gap-1.5 print-hidden">

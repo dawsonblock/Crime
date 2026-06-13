@@ -33,6 +33,9 @@ export interface EventItem {
   sourceHash: string;
   createdAt: string;
   imageUrls?: string[];
+  threatScore?: number;
+  sourcesList?: Array<{ name: string; url: string; key: string }>;
+  dedupeHash?: string;
 }
 
 export interface IngestionResult {
@@ -41,3 +44,13 @@ export interface IngestionResult {
   message: string;
   addedEvents: EventItem[];
 }
+
+export interface CustomRouteItem {
+  id: string;
+  title: string;
+  note: string;
+  path: Array<[number, number]>; // Array of [latitude, longitude] tuples
+  createdAt: string;
+  isActive?: boolean;
+}
+
