@@ -414,14 +414,123 @@ export default function AlertZonesPanel({
                 </div>
                 
                 {currentDrawnPath.length > 0 ? (
-                  <div className="flex items-center justify-between text-[11px] font-mono bg-white border border-amber-150 rounded-lg p-2 font-bold text-amber-900">
-                    <span>Coordinates Placed:</span>
-                    <span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full text-xs">
-                      {currentDrawnPath.length}
-                    </span>
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between text-[11px] font-mono bg-white border border-amber-150 rounded-lg p-2 font-bold text-amber-900">
+                      <span>Waypoints Placed:</span>
+                      <span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full text-xs animate-pulse">
+                        {currentDrawnPath.length}
+                      </span>
+                    </div>
+
+                    {/* Dynamic High-Severity Hotspots Indicator & Risk Triggers */}
+                    {(() => {
+                      const liveRiskProfile = calculateRouteRiskScore(currentDrawnPath, events);
+                      const highSeverityEvents = liveRiskProfile.intersectingEvents.filter(
+                        (item) => item.event.severity === "critical" || item.event.severity === "high"
+                      );
+                      const allIntersectingEvents = liveRiskProfile.intersectingEvents;
+                      const count = highSeverityEvents.length;
+
+                      // Micro UI theme state customization for the hotspot warning banner
+                      let wrapperBg = "bg-rose-50 border-rose-220 text-rose-800";
+                      let countBg = "bg-rose-600 text-white";
+                      let hintText = "Critical safety status. Severe danger hazards detected nearby.";
+                      let alertColor = "text-rose-600 animate-pulse";
+
+                      if (count === 0) {
+                        wrapperBg = "bg-emerald-50 border-emerald-250 text-emerald-800";
+                        countBg = "bg-emerald-600 text-white";
+                        hintText = "Clear trajectory. Zero severe threat incidents detected.";
+                        alertColor = "text-emerald-600";
+                      } else if (count <= 2) {
+                        wrapperBg = "bg-amber-50 border-amber-250 text-amber-900";
+                        countBg = "bg-amber-600 text-white";
+                        hintText = "Caution status. Moderate/high risk proximity advisory.";
+                        alertColor = "text-amber-600 animate-pulse";
+                      }
+
+                      return (
+                        <div className="space-y-3">
+                          {/* Alert Summary Box */}
+                          <div className={`border rounded-xl p-3 space-y-2 transition-all duration-300 animate-fadeIn ${wrapperBg}`}>
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-1.5 text-[10.5px] font-extrabold uppercase tracking-wide">
+                                <AlertCircle size={13} className={alertColor} />
+                                <span>Corridor Safety Watch</span>
+                              </div>
+                              <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-black shadow-sm shrink-0 ${countBg}`}>
+                                {count} Severe
+                              </span>
+                            </div>
+
+                            <p className="text-[9.5px] leading-snug font-medium italic opacity-95 text-left">
+                              {hintText}
+                            </p>
+                          </div>
+
+                          {/* Dedicated 'Risk Triggers' section */}
+                          <div className="bg-white border border-slate-200 rounded-xl p-3 space-y-2.5 shadow-sm text-left animate-fadeIn">
+                            <div className="flex items-center justify-between border-b border-slate-100 pb-1.5 select-none">
+                              <div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-slate-500 font-mono">
+                                <AlertTriangle size={12} className="text-amber-500 animate-bounce" />
+                                <span>Risk Triggers</span>
+                              </div>
+                              <span className="bg-slate-100 text-slate-700 text-[10px] font-extrabold px-1.5 py-0.5 rounded-md font-mono">
+                                {allIntersectingEvents.length} detected
+                              </span>
+                            </div>
+
+                            {allIntersectingEvents.length === 0 ? (
+                              <div className="text-center py-4 bg-slate-50/50 border border-dashed border-slate-200 rounded-lg text-slate-400 text-[10px] font-medium italic select-none">
+                                No active hazards within 1 km warning buffer.
+                              </div>
+                            ) : (
+                              <div className="space-y-1.5 max-h-[160px] overflow-y-auto scrollbar-thin scrollbar-thumb-slate-200">
+                                {allIntersectingEvents.map(({ event, distanceM }) => {
+                                  const pct = Math.round(distanceM);
+                                  const distanceStr = pct >= 1000 
+                                    ? (pct / 1000).toFixed(2) + " km" 
+                                    : pct + " m";
+
+                                  let severityBadge = "bg-blue-105 text-blue-700";
+                                  let bulletColor = "bg-blue-500";
+                                  if (event.severity === "critical") {
+                                    severityBadge = "bg-red-105 text-red-750 font-bold";
+                                    bulletColor = "bg-red-500 animate-pulse";
+                                  } else if (event.severity === "high") {
+                                    severityBadge = "bg-amber-105 text-amber-750";
+                                    bulletColor = "bg-amber-500";
+                                  }
+
+                                  return (
+                                    <div
+                                      key={event.id}
+                                      className="group/item flex items-start gap-2 bg-slate-50/70 hover:bg-violet-50/50 p-2 rounded-lg border border-slate-200/50 hover:border-violet-200/80 transition-all text-[10px]"
+                                    >
+                                      <span className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${bulletColor}`} />
+                                      <div className="flex-1 min-w-0">
+                                        <div className="font-extrabold text-slate-805 line-clamp-2 leading-snug group-hover/item:text-violet-750 transition-colors">
+                                          {event.title}
+                                        </div>
+                                        <div className="mt-0.5 flex flex-wrap items-center justify-between text-[8.5px] font-mono text-slate-450 leading-none gap-1">
+                                          <span className="capitalize">{event.severity} Severity</span>
+                                          <span className="font-bold text-slate-600 bg-white border border-slate-200/60 px-1 py-0.2 rounded">
+                                            {distanceStr} away
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 ) : (
-                  <div className="text-center py-2.5 border border-dashed border-amber-250 bg-amber-50/40 rounded-lg text-[10.5px] text-amber-750 italic font-bold">
+                  <div className="text-center py-2.5 border border-dashed border-amber-250 bg-amber-50/40 rounded-lg text-[10.5px] text-amber-750 italic font-bold animate-pulse">
                     No nodes selected. Click the map grid.
                   </div>
                 )}
