@@ -891,6 +891,10 @@ export default function AlertZonesPanel({
                 const isExpanded = expandedRouteId === route.id;
                 const isSelected = selectedRouteId === route.id;
 
+                const hasHighSeverityClose = riskProfile.intersectingEvents.some(
+                  (ie) => (ie.event.severity === "high" || ie.event.severity === "critical") && ie.distanceM <= 500
+                );
+
                 let scoreColor = "text-emerald-600";
                 let bgProgressColor = "bg-emerald-500";
                 let badgeStyle = "bg-emerald-50 border-emerald-250 text-emerald-800";
@@ -932,6 +936,12 @@ export default function AlertZonesPanel({
                             <Route size={10} />
                             <span>{riskLabel}</span>
                           </span>
+                          {hasHighSeverityClose && (
+                            <span className="inline-flex items-center gap-1 py-0.5 px-1.5 border border-red-200 bg-red-100 text-red-800 rounded-md text-[9px] font-black uppercase tracking-wide shadow-sm animate-pulse">
+                              <AlertTriangle size={10} />
+                              <span>Danger &lt; 500m</span>
+                            </span>
+                          )}
                         </div>
                         <h4 className="text-xs font-bold text-slate-800 leading-snug group-hover:text-indigo-650 transition-colors zoom-all">
                           {route.title}

@@ -80,8 +80,8 @@ function getClusters(
       id: `item-${evt.id}`,
       isCluster: false,
       events: [evt],
-      latitude: evt.latitude,
-      longitude: evt.longitude,
+      latitude: (evt.displayLatitude ?? evt.latitude),
+      longitude: (evt.displayLongitude ?? evt.longitude),
     }));
   }
 
@@ -89,7 +89,7 @@ function getClusters(
   const distanceThreshold = distanceThresholdValue; // Pixels at current zoom level to group markers
 
   events.forEach((evt) => {
-    const latLng = L.latLng(evt.latitude, evt.longitude);
+    const latLng = L.latLng((evt.displayLatitude ?? evt.latitude), (evt.displayLongitude ?? evt.longitude));
     const projPoint = map.project(latLng, zoom);
 
     let joined = false;
@@ -101,8 +101,8 @@ function getClusters(
         cluster.events.push(evt);
         // Recalculate cluster center as the average of its coordinates
         const count = cluster.events.length;
-        cluster.latitude = cluster.events.reduce((sum, e) => sum + e.latitude, 0) / count;
-        cluster.longitude = cluster.events.reduce((sum, e) => sum + e.longitude, 0) / count;
+        cluster.latitude = cluster.events.reduce((sum, e) => sum + (e.displayLatitude ?? e.latitude), 0) / count;
+        cluster.longitude = cluster.events.reduce((sum, e) => sum + (e.displayLongitude ?? e.longitude), 0) / count;
         joined = true;
         break;
       }
@@ -113,8 +113,8 @@ function getClusters(
         id: `item-${evt.id}`,
         isCluster: false,
         events: [evt],
-        latitude: evt.latitude,
-        longitude: evt.longitude,
+        latitude: (evt.displayLatitude ?? evt.latitude),
+        longitude: (evt.displayLongitude ?? evt.longitude),
       });
     }
   });
@@ -228,6 +228,7 @@ export default function IncidentMap({
   setSelectedRouteId
 }: IncidentMapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
+  const mapCaptureRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const onMapUpdateRef = useRef(onMapUpdate);
 
@@ -535,15 +536,25 @@ export default function IncidentMap({
   const [shareSuccess, setShareSuccess] = useState<boolean>(false);
 
   const handleTakeSnapshot = async () => {
-    if (!mapContainerRef.current) return;
+    if (!mapCaptureRef.current) return;
     setIsCapturing(true);
 
     try {
-      // Find the map container
-      const targetElement = mapContainerRef.current;
+      // Find the map container holding all active layers (Leaflet map tiles, pins, paths, and WebGL Heatmap layer)
+      const targetElement = mapCaptureRef.current;
 
       // Allow map assets to settle/render
       await new Promise((resolve) => setTimeout(resolve, 300));
+
+      // Temporarily clear map CSS rotation / transform to prevent html2canvas skewing and clipping
+      const originalTransform = targetElement.style.transform;
+      const originalTransition = targetElement.style.transition;
+      
+      targetElement.style.transition = "none";
+      targetElement.style.transform = "none";
+
+      // Allow styles to register
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
       // Capture map container using html2canvas
       const canvas = await html2canvas(targetElement, {
@@ -560,6 +571,10 @@ export default function IncidentMap({
           );
         },
       });
+
+      // Restore original rotation styling and transition animation right after capture
+      targetElement.style.transform = originalTransform;
+      targetElement.style.transition = originalTransition;
 
       const dataUrl = canvas.toDataURL("image/png");
       setSnapshotUrl(dataUrl);
@@ -1099,17 +1114,17 @@ export default function IncidentMap({
     };
 
     const createCustomPinIcon = (severity: SeverityType) => {
-      let colorClass = "bg-violet-600 border border-white text-white shadow-md shadow-violet-800/50";
-      let pingClass = "bg-violet-500";
+      let colorClass = "bg-yellow-400 border border-white text-slate-800 shadow-md shadow-yellow-800/50";
+      let pingClass = "bg-yellow-300";
       if (severity === "critical") {
-        colorClass = "bg-fuchsia-700 border border-white text-white shadow-md shadow-fuchsia-800/50";
-        pingClass = "bg-fuchsia-600";
+        colorClass = "bg-red-600 border border-white text-white shadow-md shadow-red-800/50";
+        pingClass = "bg-red-500";
       } else if (severity === "high") {
-        colorClass = "bg-purple-600 border border-white text-white shadow-md shadow-purple-800/50";
-        pingClass = "bg-purple-500";
+        colorClass = "bg-orange-500 border border-white text-white shadow-md shadow-orange-800/50";
+        pingClass = "bg-orange-400";
       } else if (severity === "low") {
-        colorClass = "bg-indigo-500 border border-white text-white shadow-md shadow-indigo-700/50";
-        pingClass = "bg-indigo-400";
+        colorClass = "bg-slate-400 border border-white text-white shadow-md shadow-slate-700/50";
+        pingClass = "bg-slate-300";
       }
 
       return L.divIcon({
@@ -1251,7 +1266,7 @@ export default function IncidentMap({
         const radMeters = pin.alertRadiusMeters || 1000;
         const pinLatLng = L.latLng(pin.latitude, pin.longitude);
         events.forEach((evt) => {
-          const evtLatLng = L.latLng(evt.latitude, evt.longitude);
+          const evtLatLng = L.latLng((evt.displayLatitude ?? evt.latitude), (evt.displayLongitude ?? evt.longitude));
           if (pinLatLng.distanceTo(evtLatLng) <= radMeters) {
             count++;
           }
@@ -1334,7 +1349,7 @@ export default function IncidentMap({
           radius = 220;
         }
 
-        const circle = L.circle([evt.latitude, evt.longitude], {
+        const circle = L.circle([(evt.displayLatitude ?? evt.latitude), (evt.displayLongitude ?? evt.longitude)], {
           color: "transparent",
           fillColor: heatColor,
           fillOpacity: heatmapOpacity,
@@ -1542,6 +1557,7 @@ export default function IncidentMap({
     <div className="relative flex-1 h-full select-none overflow-hidden bg-[#0A0F1D]">
       {/* Container with dynamic rotation applied to map container */}
       <div 
+        ref={mapCaptureRef}
         className="h-full w-full outline-none relative transition-transform duration-500 ease-out origin-center"
         style={{ 
           transform: `rotate(${mapRotation}deg) scale(${mapRotation === 0 ? 1 : dynamicScale})` 
@@ -1911,10 +1927,10 @@ export default function IncidentMap({
             id="map-save-snapshot-export-btn"
             onClick={handleTakeSnapshot}
             className="cursor-pointer w-full text-center py-2 text-xs font-semibold rounded-md bg-blue-600 border border-blue-700 text-white hover:bg-blue-500 hover:text-white shadow-sm hover:shadow transition-all flex items-center justify-center gap-2"
-            title="Saves high-res snapshot with active layers, pins, and coordinate markers"
+            title="Saves high-res snapshot of current view with active layers, pins, and heatmap"
           >
             <Camera size={13} className="text-white shrink-0" />
-            <span>Save Map Snapshot</span>
+            <span>Export View as PNG</span>
           </button>
         </div>
 
@@ -2106,7 +2122,7 @@ export default function IncidentMap({
           <button
             onClick={handleTakeSnapshot}
             className="p-2.5 hover:bg-slate-50 text-slate-600 hover:text-blue-600 border-b border-slate-150 cursor-pointer transition-colors flex justify-center items-center"
-            title="Take Viewport Snapshot"
+            title="Export View as High-Res PNG"
           >
             <Camera size={13} />
           </button>

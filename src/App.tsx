@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { AlertCircle, ShieldAlert, Sparkles, X, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, HelpCircle, Navigation, Info, ExternalLink, Bookmark, TrendingUp, Upload, Download, BarChart3, Wifi, WifiOff, MessageSquare, MapPin, ArrowLeftRight, Flame, Plus, Minus, Settings, Filter, Layers, Clock, Minimize2, Maximize2, Bell, LogIn, LogOut, Database, Cloud, ShieldCheck } from "lucide-react";
+import { AlertCircle, ShieldAlert, Sparkles, X, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, HelpCircle, Navigation, Info, ExternalLink, Bookmark, TrendingUp, Upload, Download, BarChart3, Wifi, WifiOff, MessageSquare, MapPin, ArrowLeftRight, Flame, Plus, Minus, Settings, Filter, Layers, Clock, Minimize2, Maximize2, Bell, LogIn, LogOut, Database, Cloud, ShieldCheck, Search } from "lucide-react";
 import { EventItem, EventSource, SeverityType, CustomRouteItem } from "./types";
 import { auth, googleProvider, signInWithPopup, signOut } from "./lib/firebase";
 import { onAuthStateChanged, User } from "firebase/auth";
@@ -16,6 +16,7 @@ import TrendsPanel from "./components/TrendsPanel";
 import UploadNewsPanel from "./components/UploadNewsPanel";
 import RiskAssessment from "./components/RiskAssessment";
 import BookmarksPanel from "./components/BookmarksPanel";
+import ArchivePanel from "./components/ArchivePanel";
 import RegionalMetricsModal from "./components/RegionalMetricsModal";
 import SafetyChatbot from "./components/SafetyChatbot";
 import PrintableIncidentReport from "./components/PrintableIncidentReport";
@@ -71,7 +72,7 @@ export default function App() {
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
 
   // Toggle States & App Controls
-  const [sidebarTab, setSidebarTab] = useState<"list" | "summary" | "trends" | "risk" | "upload_news" | "bookmarks" | "chat" | "projection" | "zones">("list");
+  const [sidebarTab, setSidebarTab] = useState<"list" | "summary" | "trends" | "risk" | "upload_news" | "bookmarks" | "chat" | "projection" | "zones" | "archive">("list");
   const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(null);
   const [isIngesting, setIsIngesting] = useState<boolean>(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState<boolean>(false);
@@ -1866,6 +1867,19 @@ export default function App() {
                     </button>
                     <button
                       type="button"
+                      id="archive-tab-trigger"
+                      onClick={() => setSidebarTab("archive")}
+                      className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide flex items-center gap-1 leading-none ${
+                        sidebarTab === "archive"
+                          ? "bg-slate-700 text-white shadow-sm"
+                          : "text-slate-450 hover:text-slate-700"
+                      }`}
+                    >
+                      <Search size={11} className={sidebarTab === "archive" ? "text-white" : ""} />
+                      Archive
+                    </button>
+                    <button
+                      type="button"
                       id="upload-news-tab-trigger"
                       onClick={() => setSidebarTab("upload_news")}
                       className={`cursor-pointer px-2.5 py-1 rounded-md text-[10.5px] font-extrabold transition-all duration-200 uppercase tracking-wide flex items-center gap-1 leading-none ${
@@ -1994,6 +2008,15 @@ export default function App() {
                       onSelectEvent={(evt) => setSelectedEvent(evt)}
                       onToggleBookmark={handleToggleBookmark}
                       onUpdateBookmarkNote={handleUpdateBookmarkNote}
+                    />
+                  </div>
+                ) : sidebarTab === "archive" ? (
+                  <div className="flex-1 overflow-hidden flex flex-col bg-slate-55" id="tab-archive-container">
+                    <ArchivePanel
+                      events={events}
+                      onSelectEvent={(evt) => setSelectedEvent(evt)}
+                      bookmarks={bookmarks}
+                      onToggleBookmark={handleToggleBookmark}
                     />
                   </div>
                 ) : sidebarTab === "zones" ? (

@@ -121,8 +121,8 @@ export default function WebGLHeatmapOverlay({
     if (!canvas) return;
 
     const gl =
-      canvas.getContext("webgl", { alpha: true, antialias: true, premultipliedAlpha: false }) ||
-      (canvas.getContext("experimental-webgl", { alpha: true, antialias: true, premultipliedAlpha: false }) as WebGLRenderingContext | null);
+      canvas.getContext("webgl", { alpha: true, antialias: true, premultipliedAlpha: false, preserveDrawingBuffer: true }) ||
+      (canvas.getContext("experimental-webgl", { alpha: true, antialias: true, premultipliedAlpha: false, preserveDrawingBuffer: true }) as WebGLRenderingContext | null);
 
     if (!gl) {
       console.error("WebGL context instantiation failed.");

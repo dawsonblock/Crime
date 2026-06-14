@@ -141,7 +141,7 @@ export default function EventDrawer({
             <div className="w-full border-t border-dashed border-slate-500/50 h-0 top-1/2 absolute" />
           </div>
 
-          {selectedEvent.latitude % 2 !== 0 && (
+          {(selectedEvent.displayLatitude ?? selectedEvent.latitude) % 2 !== 0 && (
             <div className={`absolute top-0 right-0 w-32 h-32 rounded-bl-full border-l-4 border-b-4 ${
               viewMode === "thermal"
                 ? "bg-red-950/20 border-red-500/40"
@@ -234,8 +234,8 @@ export default function EventDrawer({
 
             <div className="absolute top-6 left-6 whitespace-nowrap bg-slate-950/90 border border-slate-800 rounded px-1.5 py-0.5 text-[8px] font-mono text-slate-300 shadow-lg flex flex-col gap-0.5 leading-none">
               <span className="font-bold text-amber-500 uppercase">INCIDENT BLOCK</span>
-              <span>lat: {selectedEvent.latitude.toFixed(4)}</span>
-              <span>lng: {selectedEvent.longitude.toFixed(4)}</span>
+              <span>lat: {(selectedEvent.displayLatitude ?? selectedEvent.latitude).toFixed(4)}</span>
+              <span>lng: {(selectedEvent.displayLongitude ?? selectedEvent.longitude).toFixed(4)}</span>
             </div>
           </div>
         </div>
@@ -721,9 +721,9 @@ export default function EventDrawer({
                 Level: {selectedEvent.locationPrecision}
               </span>
               <span>•</span>
-              <span>lat: {selectedEvent.latitude.toFixed(4)}</span>
+              <span>lat: {(selectedEvent.displayLatitude ?? selectedEvent.latitude).toFixed(4)}</span>
               <span>•</span>
-              <span>lng: {selectedEvent.longitude.toFixed(4)}</span>
+              <span>lng: {(selectedEvent.displayLongitude ?? selectedEvent.longitude).toFixed(4)}</span>
             </div>
           </div>
 
@@ -1257,7 +1257,7 @@ export default function EventDrawer({
               <div className="flex-1 relative flex flex-col items-center justify-center bg-slate-900/45 p-4 border-b md:border-b-0 md:border-r border-slate-850 overflow-hidden">
                 {/* HUD Top Coordinates label */}
                 <div className="absolute top-3 left-4 pointer-events-none text-[8px] font-mono text-slate-500 tracking-wider">
-                  SASKATOON FEED // LATT: {selectedEvent.latitude.toFixed(5)} // LONG: {selectedEvent.longitude.toFixed(5)}
+                  SASKATOON FEED // LATT: {(selectedEvent.displayLatitude ?? selectedEvent.latitude).toFixed(5)} // LONG: {(selectedEvent.displayLongitude ?? selectedEvent.longitude).toFixed(5)}
                 </div>
                 <div className="absolute top-3 right-4 pointer-events-none flex items-center gap-1.5">
                   {isScanning && (

@@ -28,6 +28,8 @@ export interface EventItem {
   locationText: string;
   latitude: number;
   longitude: number;
+  displayLatitude?: number;
+  displayLongitude?: number;
   locationPrecision: LocationPrecisionType;
   locationConfidence: number;
   sourceHash: string;

@@ -1213,6 +1213,8 @@ function ruleBasedClassifier(title: string, summary: string): { eventType: strin
 async function geocodeLocation(addressText: string, sourceKey: string): Promise<{
   latitude: number;
   longitude: number;
+  displayLatitude: number;
+  displayLongitude: number;
   locationPrecision: LocationPrecisionType;
   locationConfidence: number;
   locationText: string;
@@ -1345,19 +1347,22 @@ async function geocodeLocation(addressText: string, sourceKey: string): Promise<
     determinedPrecision = "block";
   }
 
-  // Handle precision-specific generalized rounding for coordinates to protect individual privacy
+  let displayLat = lat;
+  let displayLng = lng;
+
+  // Handle precision-specific generalized rounding for display coordinates to protect individual privacy
   if (determinedPrecision === "block" || determinedPrecision === "intersection") {
     // Round to 3 decimal places (~110m accuracy)
-    lat = Math.round(lat * 1000) / 1000;
-    lng = Math.round(lng * 1000) / 1000;
+    displayLat = Math.round(lat * 1000) / 1000;
+    displayLng = Math.round(lng * 1000) / 1000;
   } else if (determinedPrecision === "neighbourhood") {
     // Round to 2 decimal places (~1.1km accuracy)
-    lat = Math.round(lat * 100) / 100;
-    lng = Math.round(lng * 100) / 100;
+    displayLat = Math.round(lat * 100) / 100;
+    displayLng = Math.round(lng * 100) / 100;
   } else if (determinedPrecision === "city" || determinedPrecision === "unknown") {
     // Round to 1 decimal place (~11km accuracy)
-    lat = Math.round(lat * 10) / 10;
-    lng = Math.round(lng * 10) / 10;
+    displayLat = Math.round(lat * 10) / 10;
+    displayLng = Math.round(lng * 10) / 10;
   }
 
   if (determinedPrecision === "unknown") {
@@ -1367,6 +1372,8 @@ async function geocodeLocation(addressText: string, sourceKey: string): Promise<
   return {
     latitude: lat,
     longitude: lng,
+    displayLatitude: displayLat,
+    displayLongitude: displayLng,
     locationPrecision: determinedPrecision,
     locationConfidence: conf,
     locationText: finalLocationText
@@ -2222,8 +2229,8 @@ app.post("/api/events/report-manual", async (req, res) => {
         severity: ruleClass.severity,
         confidence: ruleClass.confidence,
         locationText: geocoded.locationText,
-        latitude: geocoded.latitude,
-        longitude: geocoded.longitude,
+        latitude: geocoded.latitude, displayLatitude: geocoded.displayLatitude,
+        longitude: geocoded.longitude, displayLongitude: geocoded.displayLongitude,
         locationPrecision: geocoded.locationPrecision,
         locationConfidence: geocoded.locationConfidence,
         sourceHash: "manual-hash-" + Math.random(),
@@ -2298,8 +2305,8 @@ Generate an objective, highly informative 2-sentence summary.`;
       severity: (validatedClass.severity || result.severity || "medium") as SeverityType,
       confidence: Math.round(((validatedClass.confidence + (result.locationConfidence || 0.8)) / 2) * 100) / 100,
       locationText: geocoded.locationText,
-      latitude: geocoded.latitude,
-      longitude: geocoded.longitude,
+      latitude: geocoded.latitude, displayLatitude: geocoded.displayLatitude,
+      longitude: geocoded.longitude, displayLongitude: geocoded.displayLongitude,
       locationPrecision: geocoded.locationPrecision,
       locationConfidence: geocoded.locationConfidence,
       sourceHash: "interactive-hash-" + Math.random(),
@@ -2456,8 +2463,8 @@ Return a valid JSON array matching this schema. Even if there is only 1 event, r
           severity: classification.severity,
           confidence: classification.confidence,
           locationText: geocoded.locationText,
-          latitude: geocoded.latitude,
-          longitude: geocoded.longitude,
+          latitude: geocoded.latitude, displayLatitude: geocoded.displayLatitude,
+          longitude: geocoded.longitude, displayLongitude: geocoded.displayLongitude,
           locationPrecision: geocoded.locationPrecision,
           locationConfidence: geocoded.locationConfidence,
           sourceHash: "upload-hash-" + Math.random(),
@@ -2599,8 +2606,8 @@ app.post("/api/ingest/run", async (req, res) => {
             severity: classified.severity,
             confidence: classified.confidence,
             locationText: geocoded.locationText,
-            latitude: geocoded.latitude,
-            longitude: geocoded.longitude,
+            latitude: geocoded.latitude, displayLatitude: geocoded.displayLatitude,
+            longitude: geocoded.longitude, displayLongitude: geocoded.displayLongitude,
             locationPrecision: geocoded.locationPrecision,
             locationConfidence: geocoded.locationConfidence,
             sourceHash: "simulated-hash-" + raw.id,
@@ -2669,8 +2676,8 @@ Use actual local Saskatoon landmarks (e.g., Preston Crossing, Stonebridge, Spadi
             severity: (ruleClass.severity || item.severity || "medium") as SeverityType,
             confidence: ruleClass.confidence || 0.94,
             locationText: geocoded.locationText,
-            latitude: geocoded.latitude,
-            longitude: geocoded.longitude,
+            latitude: geocoded.latitude, displayLatitude: geocoded.displayLatitude,
+            longitude: geocoded.longitude, displayLongitude: geocoded.displayLongitude,
             locationPrecision: geocoded.locationPrecision,
             locationConfidence: geocoded.locationConfidence,
             sourceHash: `ingest-hash-${customId}`,
@@ -2815,8 +2822,8 @@ async function fetchSaskatoonNewsFeeds(): Promise<EventItem[]> {
             severity: classified.severity,
             confidence: classified.confidence,
             locationText: geocoded.locationText,
-            latitude: geocoded.latitude,
-            longitude: geocoded.longitude,
+            latitude: geocoded.latitude, displayLatitude: geocoded.displayLatitude,
+            longitude: geocoded.longitude, displayLongitude: geocoded.displayLongitude,
             locationPrecision: geocoded.locationPrecision,
             locationConfidence: geocoded.locationConfidence,
             sourceHash: "cbc-hash-" + uniqueId,
@@ -2867,8 +2874,8 @@ async function fetchSaskatoonNewsFeeds(): Promise<EventItem[]> {
             severity: classified.severity,
             confidence: classified.confidence,
             locationText: geocoded.locationText,
-            latitude: geocoded.latitude,
-            longitude: geocoded.longitude,
+            latitude: geocoded.latitude, displayLatitude: geocoded.displayLatitude,
+            longitude: geocoded.longitude, displayLongitude: geocoded.displayLongitude,
             locationPrecision: geocoded.locationPrecision,
             locationConfidence: geocoded.locationConfidence,
             sourceHash: "glo-hash-" + uniqueId,
@@ -2927,8 +2934,8 @@ async function fetchReginaNewsFeeds(): Promise<EventItem[]> {
             severity: classified.severity,
             confidence: 0.90,
             locationText: geocoded.locationText || "Regina, SK",
-            latitude: geocoded.latitude,
-            longitude: geocoded.longitude,
+            latitude: geocoded.latitude, displayLatitude: geocoded.displayLatitude,
+            longitude: geocoded.longitude, displayLongitude: geocoded.displayLongitude,
             locationPrecision: geocoded.locationPrecision,
             locationConfidence: geocoded.locationConfidence,
             sourceHash: "reg-cbc-hash-" + uniqueId,
@@ -2976,8 +2983,8 @@ async function fetchReginaNewsFeeds(): Promise<EventItem[]> {
             severity: classified.severity,
             confidence: 0.88,
             locationText: geocoded.locationText || "Regina, SK",
-            latitude: geocoded.latitude,
-            longitude: geocoded.longitude,
+            latitude: geocoded.latitude, displayLatitude: geocoded.displayLatitude,
+            longitude: geocoded.longitude, displayLongitude: geocoded.displayLongitude,
             locationPrecision: geocoded.locationPrecision,
             locationConfidence: geocoded.locationConfidence,
             sourceHash: "reg-glo-hash-" + uniqueId,
@@ -3047,8 +3054,8 @@ async function fetchSaskatchewanRCMPFeeds(): Promise<EventItem[]> {
           severity: classification.severity,
           confidence: 0.95,
           locationText: locationStr,
-          latitude: geocoded.latitude,
-          longitude: geocoded.longitude,
+          latitude: geocoded.latitude, displayLatitude: geocoded.displayLatitude,
+          longitude: geocoded.longitude, displayLongitude: geocoded.displayLongitude,
           locationPrecision: matchedTown === "saskatchewan" ? "city" : "block",
           locationConfidence: 0.90,
           sourceHash: "rcmp-hash-" + uniqueId,
@@ -3122,8 +3129,8 @@ async function fetchOtherMunicipalFeeds(): Promise<EventItem[]> {
             severity: classification.severity,
             confidence: 0.85,
             locationText: `${matchedCity}, SK`,
-            latitude: geocoded.latitude,
-            longitude: geocoded.longitude,
+            latitude: geocoded.latitude, displayLatitude: geocoded.displayLatitude,
+            longitude: geocoded.longitude, displayLongitude: geocoded.displayLongitude,
             locationPrecision: "city",
             locationConfidence: 0.82,
             sourceHash: "sk-muni-hash-" + uniqueId,
