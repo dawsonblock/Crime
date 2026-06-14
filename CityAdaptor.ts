@@ -172,6 +172,10 @@ export class CityAdaptor {
       }
 
       case "Regina": {
+        if (process.env.DEMO_MODE !== "true") {
+          console.log("[CityAdaptor] Regina feed requested. Bypassing mock data in production.");
+          break;
+        }
         // Regina Police Format: official release bulletins
         const mockReginaBulletins = [
           {
@@ -219,6 +223,10 @@ export class CityAdaptor {
       }
 
       case "Prince Albert": {
+        if (process.env.DEMO_MODE !== "true") {
+          console.log("[CityAdaptor] Prince Albert feed requested. Bypassing mock data in production.");
+          break;
+        }
         // Prince Albert Police Bulletins
         const bulletins = [
           {
@@ -260,6 +268,10 @@ export class CityAdaptor {
       }
 
       case "Moose Jaw": {
+        if (process.env.DEMO_MODE !== "true") {
+          console.log("[CityAdaptor] Moose Jaw feed requested. Bypassing mock data in production.");
+          break;
+        }
         const bulletins = [
           {
             title: "Moose Jaw Police Detail Vandalism and Mischief Incidents",
@@ -301,6 +313,9 @@ export class CityAdaptor {
 
       // Default RCMP feed formatting logic for Swift Current, Yorkton, North Battleford, Estevan, Weyburn, Lloydminster
       default: {
+        if (process.env.DEMO_MODE !== "true") {
+          break;
+        }
         const titleText = `${config.name} RCMP Detachment Inquest Into Disturbance Complaint`;
         const summaryText = `The local ${config.name} RCMP detachment responded to security violations near central municipal boundaries. General caution advised during active walkthrough investigations.`;
         const locationStr = `Central Avenue, ${config.name}, SK`;
@@ -341,6 +356,9 @@ export class CityAdaptor {
    * Dynamically ingests the town council/municipal safety feed format for a specific Saskatchewan city
    */
   static async ingestCouncilFeed(cityName: string, ctx: IngestionContext): Promise<EventItem[]> {
+    if (process.env.DEMO_MODE !== "true") {
+      return [];
+    }
     const config = CITY_CONFIGS[cityName];
     if (!config) return [];
 

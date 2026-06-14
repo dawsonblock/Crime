@@ -515,6 +515,7 @@ export default function App() {
     userLng: null,
     criticalOnly: false,
     sourceTiers: [1, 2, 3, 4],
+    autoGroupEvents: false,
   });
 
   // Saskatchewan Regional Cities & Major Hubs configuration
@@ -2112,6 +2113,161 @@ export default function App() {
                         <AlertCircle size={22} className="mx-auto text-slate-400 animate-pulse" />
                         <p className="text-xs text-slate-500 font-medium">No safety incidents found matching current filter scope.</p>
                       </div>
+                    ) : filters.autoGroupEvents ? (
+                      (() => {
+                        const severityWeights: Record<SeverityType, number> = {
+                          critical: 4,
+                          high: 3,
+                          medium: 2,
+                          low: 1
+                        };
+
+                        const getGroupKey = (evt: EventItem) => {
+                          const normLoc = (evt.locationText || "Saskatoon, SK").toLowerCase().trim().replace(/\s+/g, " ");
+                          const coordsStr = `${evt.displayLatitude?.toFixed(3) || "0.000"}_${evt.displayLongitude?.toFixed(3) || "0.000"}`;
+                          return `${normLoc}__${coordsStr}`;
+                        };
+
+                        const groupedMap: Record<string, EventItem[]> = {};
+                        filteredEvents.forEach(evt => {
+                          const key = getGroupKey(evt);
+                          if (!groupedMap[key]) {
+                            groupedMap[key] = [];
+                          }
+                          groupedMap[key].push(evt);
+                        });
+
+                        const groups = Object.entries(groupedMap).map(([key, evts]) => {
+                          const sortedEvts = [...evts].sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
+                          
+                          let maxWeight = 0;
+                          let maxSeverity: SeverityType = "low";
+                          sortedEvts.forEach(e => {
+                            const w = severityWeights[e.severity] || 1;
+                            if (w > maxWeight) {
+                              maxWeight = w;
+                              maxSeverity = e.severity;
+                            }
+                          });
+
+                          return {
+                            key,
+                            locationText: sortedEvts[0].locationText || "Saskatoon, SK",
+                            events: sortedEvts,
+                            maxSeverity: maxSeverity as SeverityType,
+                            latestTimestamp: sortedEvts[0].publishedAt
+                          };
+                        });
+
+                        groups.sort((a, b) => new Date(b.latestTimestamp).getTime() - new Date(a.latestTimestamp).getTime());
+
+                        return groups.map(group => {
+                          const isAnySelected = selectedEvent ? group.events.some(e => e.id === selectedEvent.id) : false;
+                          
+                          return (
+                            <div
+                              key={group.key}
+                              className={`p-3.5 rounded-xl border text-left transition-all relative space-y-2.5 shadow-sm ${
+                                getCardSeverityBorder(group.maxSeverity)
+                              } ${
+                                isAnySelected
+                                  ? "bg-slate-50/70 border-indigo-500 ring-1 ring-indigo-500/10"
+                                  : "bg-white border-slate-200"
+                              }`}
+                            >
+                              {/* Group Header */}
+                              <div className="flex items-start justify-between gap-2 border-b border-slate-100 pb-1.5 mb-1 bg-gradient-to-r from-indigo-50/10 to-transparent p-1 -m-1 rounded-t-xl select-none">
+                                <div className="flex flex-col min-w-0">
+                                  <span className="text-[8.5px] font-mono text-indigo-600 font-extrabold tracking-wider uppercase flex items-center gap-1">
+                                    <span className="h-1.5 w-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
+                                    Block Cluster • {group.events.length} {group.events.length === 1 ? "Incident" : "Incidents"}
+                                  </span>
+                                  <h4 className="text-[11px] font-black text-slate-800 leading-tight mt-0.5 truncate pr-2">
+                                    📍 {group.locationText}
+                                  </h4>
+                                </div>
+                                <span className={`text-[8px] font-mono font-black border px-1.5 py-0.5 rounded uppercase leading-none ${
+                                  group.maxSeverity === "critical" ? "bg-red-50 text-red-700 border-red-200 animate-pulse" :
+                                  group.maxSeverity === "high" ? "bg-amber-50 text-amber-700 border-amber-200" :
+                                  group.maxSeverity === "medium" ? "bg-blue-50 text-blue-750 border-blue-150" :
+                                  "bg-slate-50 text-slate-550 border-slate-200"
+                                }`}>
+                                  {group.maxSeverity}
+                                </span>
+                              </div>
+
+                              {/* Sub-Events List */}
+                              <div className="space-y-1.5 max-h-[220px] overflow-y-auto pr-0.5 custom-scrollbar">
+                                {group.events.map(subEvt => {
+                                  const isSel = selectedEvent ? selectedEvent.id === subEvt.id : false;
+                                  const isComp = compareEventIds.includes(subEvt.id);
+                                  
+                                  return (
+                                    <div
+                                      key={subEvt.id}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedEvent(subEvt);
+                                      }}
+                                      className={`p-2 rounded-lg border text-left cursor-pointer transition-all ${
+                                        isSel
+                                          ? "bg-blue-50/50 border-blue-405 shadow-xs"
+                                          : "bg-white hover:bg-slate-50 border-slate-150 hover:border-slate-250 shadow-2xs"
+                                      }`}
+                                    >
+                                      <div className="flex items-center justify-between gap-1 text-[8.5px] mb-1 font-mono">
+                                        <div className="flex items-center gap-1 truncate text-blue-600 font-bold">
+                                          <label
+                                            className="inline-flex items-center gap-1 cursor-pointer select-none shrink-0"
+                                            onClick={(e) => e.stopPropagation()}
+                                          >
+                                            <input
+                                              type="checkbox"
+                                              value={subEvt.id}
+                                              checked={isComp}
+                                              onChange={() => handleToggleCompare(subEvt.id)}
+                                              className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-2.5 h-2.5 cursor-pointer"
+                                            />
+                                            <span className="text-[7.5px] font-bold text-slate-400 hover:text-slate-600 uppercase">
+                                              Compare
+                                            </span>
+                                          </label>
+                                          <span className="text-slate-200">|</span>
+                                          <span className="truncate text-slate-500">{subEvt.sourceName}</span>
+                                        </div>
+                                        <span className="text-slate-400 shrink-0 font-medium">{formatDistanceTime(subEvt.publishedAt)}</span>
+                                      </div>
+                                      
+                                      <h5 className="text-[10px] font-bold text-slate-805 truncate leading-tight">
+                                        {subEvt.title}
+                                      </h5>
+
+                                      <p className="text-[9.5px] text-slate-480 leading-snug line-clamp-1 max-h-4 overflow-hidden mb-1 font-medium mt-0.5">
+                                        {subEvt.summary}
+                                      </p>
+
+                                      <div className="flex items-center justify-between text-[7.5px] text-slate-400 font-mono pt-1 border-t border-slate-100/60 mt-1">
+                                        <span className="capitalize font-bold text-slate-500">{subEvt.eventType?.replace(/_/g, " ")}</span>
+                                        <div className="flex gap-1 items-center select-none shrink-0">
+                                          <span className={`px-1 py-0.2 rounded border font-extrabold capitalize text-[7px] ${
+                                            subEvt.locationPrecision === "exact" ? "bg-emerald-50 text-emerald-700 border-emerald-150" : 
+                                            "bg-blue-50 text-blue-750 border-blue-150"
+                                          }`}>
+                                            📍 {subEvt.locationPrecision}
+                                          </span>
+                                          {bookmarks.includes(subEvt.id) && (
+                                            <span className="text-amber-500 font-black">★</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        });
+                      })()
                     ) : (
                       filteredEvents.map((evt) => {
                         const isSelected = selectedEvent ? selectedEvent.id === evt.id : false;
@@ -2626,6 +2782,7 @@ export default function App() {
                   onUpdateBookmarkNote={handleUpdateBookmarkNote}
                   sizes={sizes}
                   toggleSizing={toggleSizing}
+                  allEvents={events}
                 />
               </div>
             </motion.div>

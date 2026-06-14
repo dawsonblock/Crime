@@ -8,14 +8,14 @@ import random
 def fetch_rss_feed(url):
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        ctx = ssl._create_unverified_context()
+        ctx = ssl.create_default_context()
         with urllib.request.urlopen(req, context=ctx) as response:
             return response.read()
     except urllib.error.HTTPError as he:
-        print(f"Notice: RSS endpoint {url} unreachable (HTTP {he.code}). Switching to high-fidelity simulated backup alerts.")
+        print(f"Notice: RSS endpoint {url} unreachable (HTTP {he.code}).")
         return None
     except Exception as e:
-        print(f"Notice: RSS endpoint {url} bypass (Reason: {e}). Switching to high-fidelity simulated backup alerts.")
+        print(f"Notice: RSS endpoint {url} bypass (Reason: {e}).")
         return None
 
 def extract_location_from_text(text):
@@ -31,7 +31,12 @@ def extract_location_from_text(text):
         return locations[0] + ", SK"
     return "Saskatchewan, Canada"
 
+import os
+
 def ingest_saskatchewan_gov_news(conn):
+    if os.environ.get("DEMO_MODE") != "true":
+        print("[Saskatchewan Gov] Skipping simulated data in production.")
+        return
     # Simulated endpoint for Government of Saskatchewan (as their actual site may use complicated HTML logic)
     url = "https://www.saskatchewan.ca/government/news-and-media"
     print(f"Ingesting Saskatchewan Government News from {url}")

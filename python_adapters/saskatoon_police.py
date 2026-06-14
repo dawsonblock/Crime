@@ -8,14 +8,14 @@ import random
 def fetch_rss_feed(url):
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        ctx = ssl._create_unverified_context()
+        ctx = ssl.create_default_context()
         with urllib.request.urlopen(req, context=ctx) as response:
             return response.read()
     except urllib.error.HTTPError as he:
-        print(f"Notice: RSS endpoint {url} unreachable (HTTP {he.code}). Switching to high-fidelity simulated backup alerts.")
+        print(f"Notice: RSS endpoint {url} unreachable (HTTP {he.code}).")
         return None
     except Exception as e:
-        print(f"Notice: RSS endpoint {url} bypass (Reason: {e}). Switching to high-fidelity simulated backup alerts.")
+        print(f"Notice: RSS endpoint {url} bypass (Reason: {e}).")
         return None
 
 def extract_location_from_text(text):
@@ -33,28 +33,12 @@ def extract_location_from_text(text):
         return locations[0] + ", SK"
     return "Unknown Location, SK"
 
-def use_simulated_backup(conn):
-    print("Using backup data for Saskatoon Police Service")
-    simulated_data = [
-        {
-            "title": "Weapon/Assault Investigation on 20th Street West",
-            "original_url": "https://saskatoonpolice.ca/news/2026-weapon",
-            "publication_date": "2026-06-10",
-            "source_name": "Saskatoon Police Service",
-            "summary": "Patrol officers responded to reports of an altercation involving an individual carrying a bladed weapon in the 300 block of 20th Street West.",
-            "raw_location_text": "20th Street West, Saskatoon"
-        }
-    ]
-    for item in simulated_data:
-        process_item(conn, item)
-
 def ingest_saskatoon_police_news(conn):
     url = "https://saskatoonpolice.ca/news/rss.xml"
     print(f"Ingesting Saskatoon Police News from {url}")
     
     xml_data = fetch_rss_feed(url)
     if not xml_data:
-        use_simulated_backup(conn)
         return
 
     items = []
@@ -99,7 +83,6 @@ def ingest_saskatoon_police_news(conn):
             items = []
 
     if not items:
-        use_simulated_backup(conn)
         return
 
     for title, original_url, pub_date, summary in items:

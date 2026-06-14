@@ -1,5 +1,6 @@
 import React from "react";
-import { X, ExternalLink, Bookmark, Navigation, AlertTriangle, ShieldCheck, Calendar, MapPin, Sparkles, Camera, Eye, Radio, Compass, Shield, Activity, Clock, ChevronLeft, ChevronRight, Maximize2, Minus, Share2, Twitter, Facebook, Copy, Check, Send, Printer } from "lucide-react";
+import { X, ExternalLink, Bookmark, Navigation, AlertTriangle, ShieldCheck, Calendar, MapPin, Sparkles, Camera, Eye, Radio, Compass, Shield, Activity, Clock, ChevronLeft, ChevronRight, Maximize2, Minus, Share2, Twitter, Facebook, Copy, Check, Send, Printer, FileSpreadsheet, TrendingUp, TrendingDown } from "lucide-react";
+import { ResponsiveContainer, AreaChart, Area, Tooltip as RechartsTooltip, XAxis } from "recharts";
 import { EventItem } from "../types";
 import SourceBadge from "./SourceBadge";
 
@@ -19,6 +20,7 @@ interface EventDrawerProps {
   onUpdateBookmarkNote: (eventId: string, noteText: string) => void;
   sizes?: any;
   toggleSizing?: (component: string, targetSize: "normal" | "enlarge" | "minimize") => void;
+  allEvents?: EventItem[];
 }
 
 export default function EventDrawer({
@@ -30,6 +32,7 @@ export default function EventDrawer({
   onUpdateBookmarkNote,
   sizes,
   toggleSizing,
+  allEvents = [],
 }: EventDrawerProps) {
   if (!selectedEvent) return null;
 
@@ -55,6 +58,144 @@ export default function EventDrawer({
   // Share menu expanding and copying states
   const [showShareOptions, setShowShareOptions] = React.useState<boolean>(false);
   const [copiedText, setCopiedText] = React.useState<boolean>(false);
+  const [exportedCsv, setExportedCsv] = React.useState<boolean>(false);
+
+  // 7-day category trend data calculation
+  const trendData = React.useMemo(() => {
+    if (!selectedEvent) return [];
+    const eventsList = allEvents || [];
+    const category = selectedEvent.eventType || "unknown";
+    
+    // Find the anchor (use the latest event of this type, or today, or selected event)
+    let anchor = new Date(selectedEvent.publishedAt);
+    const eventsOfCategory = eventsList.filter(e => e.eventType === category);
+    eventsOfCategory.forEach(e => {
+      const d = new Date(e.publishedAt);
+      if (d > anchor) {
+        anchor = d;
+      }
+    });
+
+    // Calculate the last 7 days ending at anchor
+    const year = anchor.getFullYear();
+    const month = anchor.getMonth();
+    const dateObj = anchor.getDate();
+    const anchorMidnight = new Date(year, month, dateObj);
+
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const day = new Date(anchorMidnight);
+      day.setDate(anchorMidnight.getDate() - i);
+      const dateKey = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+      const label = day.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      const weekday = day.toLocaleDateString("en-US", { weekday: "short" });
+      
+      days.push({
+        dateKey,
+        label,
+        weekday,
+        count: 0,
+        timestamp: day.getTime()
+      });
+    }
+
+    // Populate counts
+    eventsOfCategory.forEach(evt => {
+      const evtDate = new Date(evt.publishedAt);
+      const evtY = evtDate.getFullYear();
+      const evtM = evtDate.getMonth() + 1;
+      const evtD = evtDate.getDate();
+      const evtKey = `${evtY}-${String(evtM).padStart(2, "0")}-${String(evtD).padStart(2, "0")}`;
+      
+      const matched = days.find(d => d.dateKey === evtKey);
+      if (matched) {
+        matched.count++;
+      }
+    });
+
+    return days;
+  }, [allEvents, selectedEvent?.eventType, selectedEvent?.publishedAt]);
+
+  const totalInCategoryLastWeek = React.useMemo(() => {
+    return trendData.reduce((sum, d) => sum + d.count, 0);
+  }, [trendData]);
+
+  const trendDirection = React.useMemo(() => {
+    if (trendData.length < 2) return "neutral";
+    const midPoint = Math.floor(trendData.length / 2); // 3 days
+    const firstHalfSum = trendData.slice(0, midPoint).reduce((sum, d) => sum + d.count, 0);
+    const secondHalfSum = trendData.slice(midPoint + 1).reduce((sum, d) => sum + d.count, 0);
+    if (secondHalfSum > firstHalfSum) return "up";
+    if (secondHalfSum < firstHalfSum) return "down";
+    return "flat";
+  }, [trendData]);
+
+  const handleExportCSV = () => {
+    if (!selectedEvent) return;
+
+    const headers = [
+      "Incident ID",
+      "Title",
+      "Severity Level",
+      "Incident Type",
+      "Published Timestamp",
+      "Approximate Location",
+      "Latitude",
+      "Longitude",
+      "Summary Details",
+      "Source Publisher",
+      "Original Source URL"
+    ];
+
+    const escapeCSVField = (val: any) => {
+      if (val === null || val === undefined) return "";
+      const s = String(val).replace(/\r?\n|\r/g, " "); // flatten line breaks in CSV for cell consistency
+      if (/[",\n\r]/.test(s)) {
+        return `"${s.replace(/"/g, '""')}"`;
+      }
+      return s;
+    };
+
+    const row = [
+      selectedEvent.id,
+      selectedEvent.title,
+      selectedEvent.severity,
+      selectedEvent.eventType || "unknown",
+      selectedEvent.publishedAt,
+      selectedEvent.locationText || "Saskatoon, SK",
+      selectedEvent.latitude,
+      selectedEvent.longitude,
+      selectedEvent.summary || "",
+      selectedEvent.sourceName,
+      selectedEvent.originalUrl || ""
+    ];
+
+    const csvContent = [
+      headers.map(escapeCSVField).join(","),
+      row.map(escapeCSVField).join(",")
+    ].join("\r\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    
+    const sanitizedTitle = selectedEvent.title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .substring(0, 40);
+    const dateFormatted = new Date().toISOString().split("T")[0];
+    
+    link.download = `incident_${sanitizedTitle || "details"}_${dateFormatted}.csv`;
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    setExportedCsv(true);
+    setTimeout(() => setExportedCsv(false), 2000);
+  };
 
   const handlePrintReport = () => {
     document.body.classList.add("printing-incident-report");
@@ -254,6 +395,7 @@ export default function EventDrawer({
       setShowLightbox(false);
       setShowShareOptions(false);
       setCopiedText(false);
+      setExportedCsv(false);
     }
   }, [selectedEvent?.id]);
 
@@ -772,6 +914,99 @@ export default function EventDrawer({
           </div>
         </div>
 
+        {/* 7-day category sparkline trend chart */}
+        <div id="category-trend-sparkline-card" className="bg-slate-50/50 border border-slate-150 rounded-xl p-4 space-y-3 shadow-2xs">
+          <div className="text-[10px] uppercase font-bold tracking-wider font-mono text-slate-400 flex items-center justify-between">
+            <span className="flex items-center gap-1.5">
+              <TrendingUp size={11} className="text-indigo-600" />
+              <span>7-Day Category Trend Tracker</span>
+            </span>
+            <span className="text-[9px] bg-slate-100 border border-slate-205 text-slate-500 px-1.5 py-0.5 rounded font-mono font-bold leading-none capitalize">
+              {selectedEvent.eventType?.replace(/_/g, " ")}
+            </span>
+          </div>
+
+          <div className="flex items-center justify-between gap-4">
+            <div className="space-y-0.5">
+              <span className="text-2xl font-black text-slate-805 tracking-tight leading-none block">
+                {totalInCategoryLastWeek}
+              </span>
+              <span className="text-[10.5px] font-semibold text-slate-500 leading-tight block">
+                Total weekly incidents logged
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5 bg-white border border-slate-200/60 rounded-lg px-2.5 py-1.5 shadow-2xs select-none">
+              {trendDirection === "up" ? (
+                <>
+                  <TrendingUp size={13} className="text-red-500 stroke-[2.5]" />
+                  <span className="text-[9.5px] font-mono font-black text-red-650 uppercase">Increasing</span>
+                </>
+              ) : trendDirection === "down" ? (
+                <>
+                  <TrendingDown size={13} className="text-emerald-500 stroke-[2.5]" />
+                  <span className="text-[9.5px] font-mono font-black text-emerald-650 uppercase">Decreasing</span>
+                </>
+              ) : (
+                <>
+                  <Activity size={13} className="text-slate-400 animate-pulse" />
+                  <span className="text-[9.5px] font-mono font-black text-slate-500 uppercase">Stable</span>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Recharts Area Sparkline */}
+          <div className="h-16 w-full -mx-1" id="sparkline-trend-chart">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={trendData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
+                <defs>
+                  <linearGradient id="sparklineGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#4F46E5" stopOpacity={0.25}/>
+                    <stop offset="95%" stopColor="#4F46E5" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <XAxis 
+                  dataKey="weekday" 
+                  hide={false} 
+                  axisLine={false} 
+                  tickLine={false}
+                  tick={{ fontSize: 8, fill: '#64748B', fontWeight: 600, fontFamily: 'monospace' }}
+                  height={15}
+                />
+                <RechartsTooltip
+                  content={({ active, payload }) => {
+                    if (active && payload && payload.length) {
+                      const data = payload[0].payload;
+                      return (
+                        <div className="bg-slate-900 border border-slate-750 text-white p-1.5 rounded shadow-lg text-[9px] font-mono flex flex-col pointer-events-none leading-normal">
+                          <span className="font-bold text-slate-300">{data.label} ({data.weekday})</span>
+                          <span className="text-indigo-300 font-extrabold">{data.count} {data.count === 1 ? 'incident' : 'incidents'}</span>
+                        </div>
+                      );
+                    }
+                    return null;
+                  }}
+                />
+                <Area 
+                  type="monotone" 
+                  dataKey="count" 
+                  stroke="#4F46E5" 
+                  strokeWidth={1.8}
+                  fillOpacity={1} 
+                  fill="url(#sparklineGradient)"
+                  dot={{ r: 2, strokeWidth: 1, fill: "#FFFFFF", stroke: "#4F46E5" }}
+                  activeDot={{ r: 4, strokeWidth: 1, fill: "#4F46E5", stroke: "#FFFFFF" }}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+          
+          <p className="text-[9px] text-slate-400 font-medium leading-normal block">
+            Aggregated metric from the past week across all registered safety networks.
+          </p>
+        </div>
+
         {/* Dynamic incident content summaries */}
         <div className="space-y-2">
           <div className="text-[10px] uppercase font-bold tracking-wider font-mono text-slate-400 flex items-center gap-1.5">
@@ -1192,6 +1427,20 @@ export default function EventDrawer({
         >
           <Camera size={12} />
           <span>Virtual Street View</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={handleExportCSV}
+          className="w-full cursor-pointer bg-white border border-slate-200 text-slate-700 font-bold text-xs py-2.5 px-4 rounded flex items-center justify-center gap-1.5 transition-all hover:bg-emerald-50 hover:border-emerald-250 hover:text-emerald-700 shadow-sm animate-fadeIn"
+          title="Export this specific incident data as a formatted CSV file"
+        >
+          {exportedCsv ? (
+            <Check size={12} className="text-emerald-500 animate-pulse shrink-0" />
+          ) : (
+            <FileSpreadsheet size={12} className="text-emerald-600 shrink-0" />
+          )}
+          <span>{exportedCsv ? "CSV Compiled & Downloaded!" : "Export Event Data (CSV)"}</span>
         </button>
 
         <button

@@ -9,7 +9,7 @@ import {
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, LineChart, Line,
-  PieChart, Pie, Cell
+  PieChart, Pie, Cell, BarChart, Bar
 } from "recharts";
 
 const COLORS = ["#2563EB", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6", "#64748B"];
@@ -417,6 +417,41 @@ export default function TrendsPanel({ events }: TrendsPanelProps) {
       isImproving
     };
   }, [sentimentData]);
+
+  const timeToResolveData = useMemo(() => {
+    const typeDeltas: Record<string, number[]> = {};
+
+    events.forEach(evt => {
+      let initialTime = new Date(evt.publishedAt).getTime();
+      let resolvedTime: number | null = null;
+      const isResolved = (text: string) => /resolv|clos|clear/i.test(text);
+
+      if (evt.linkedEvents && evt.linkedEvents.length > 0) {
+        evt.linkedEvents.forEach(link => {
+          const t = new Date(link.publishedAt).getTime();
+          if (t < initialTime) initialTime = t;
+          if (isResolved(link.title) || isResolved(link.summary)) {
+            if (!resolvedTime || t > resolvedTime) resolvedTime = t;
+          }
+        });
+      }
+
+      if (resolvedTime !== null && resolvedTime > initialTime) {
+        const deltaHours = (resolvedTime - initialTime) / (1000 * 60 * 60);
+        const typeStr = evt.eventType.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
+        if (!typeDeltas[typeStr]) typeDeltas[typeStr] = [];
+        typeDeltas[typeStr].push(deltaHours);
+      }
+    });
+
+    return Object.entries(typeDeltas).map(([name, hoursArr]) => {
+      const avgHours = hoursArr.reduce((a, b) => a + b, 0) / hoursArr.length;
+      return {
+        name,
+        avgHours: parseFloat(avgHours.toFixed(1))
+      };
+    }).sort((a, b) => b.avgHours - a.avgHours);
+  }, [events]);
 
   const SentimentTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
@@ -1090,6 +1125,64 @@ export default function TrendsPanel({ events }: TrendsPanelProps) {
                       Daily baseline indices start at 100 representing perfect baseline safety. Reports reduce indices based on severity weightings and intensive content search tags (e.g. violent words yield greater decreases; resolution and secure tags cushion impact). Days with steady, quiet profiles preserve max stability.
                     </p>
                   </div>
+                </div>
+              )}
+            </div>
+
+            {/* Time-To-Resolve Chart */}
+            <div id="recharts-resolve-container" className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 shadow-inner">
+              <div className="flex items-center justify-between mb-3 border-b border-slate-200/60 pb-2 select-none">
+                <span className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500 flex items-center gap-1">
+                  <Clock size={12} className="text-amber-500 shrink-0" /> Time-To-Resolve by Incident Type
+                </span>
+                <span className="text-[8.5px] font-mono text-slate-400 font-bold uppercase">
+                  Avg Hours
+                </span>
+              </div>
+
+              {timeToResolveData.length === 0 ? (
+                <div className="text-center py-6 text-xs text-slate-400 font-semibold select-none bg-white rounded-lg border border-slate-150 p-4">
+                   <AlertCircle size={20} className="mx-auto text-slate-300 mb-1.5" />
+                   No resolution or completion data available within scope.
+                </div>
+              ) : (
+                <div className="w-full h-[180px] text-[10px] font-mono bg-white border border-slate-200/60 p-2 rounded-lg shadow-sm">
+                  <ResponsiveContainer width="100%" height="100%">
+                     <BarChart
+                        data={timeToResolveData}
+                        margin={{ top: 10, right: 10, left: -25, bottom: 0 }}
+                      >
+                       <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
+                       <XAxis 
+                          dataKey="name" 
+                          tickLine={false} 
+                          axisLine={{ stroke: "#E2E8F0" }} 
+                          stroke="#64748B" 
+                          dy={6}
+                          tick={{ fontSize: 9 }}
+                        />
+                       <YAxis 
+                          tickLine={false} 
+                          axisLine={false} 
+                          stroke="#64748B" 
+                          dx={-4}
+                          tick={{ fontSize: 9 }}
+                        />
+                       <Tooltip
+                          contentStyle={{ borderRadius: "8px", border: "1px solid #E2E8F0", fontSize: "10px", padding: "8px", backgroundColor: "#fff" }}
+                          itemStyle={{ color: "#334155", fontWeight: "bold" }}
+                          formatter={(value: number) => [`${value} hours`, "Avg Resolution"]}
+                          labelStyle={{ color: "#64748B", marginBottom: "4px", fontWeight: "bold", paddingBottom: "4px", borderBottom: "1px solid #F1F5F9" }}
+                          cursor={{ fill: '#F1F5F9' }}
+                        />
+                       <Bar 
+                          dataKey="avgHours" 
+                          fill="#F59E0B" 
+                          radius={[4, 4, 0, 0]}
+                          barSize={28}
+                       />
+                     </BarChart>
+                  </ResponsiveContainer>
                 </div>
               )}
             </div>

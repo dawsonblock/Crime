@@ -8,7 +8,7 @@ import random
 def fetch_rss_feed(url):
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        ctx = ssl._create_unverified_context()
+        ctx = ssl.create_default_context()
         with urllib.request.urlopen(req, context=ctx) as response:
             return response.read()
     except Exception as e:
@@ -28,28 +28,12 @@ def extract_location_from_text(text):
         return locations[0] + ", SK"
     return "Unknown Saskatchewan Location"
 
-def use_simulated_backup(conn):
-    print("Using backup data for Saskatchewan RCMP")
-    simulated_data = [
-        {
-            "title": "Saskatchewan RCMP Warns of Dangerous Driver on Highway 11",
-            "original_url": "https://www.rcmp-grc.gc.ca/en/news/highway-11-stop",
-            "publication_date": "2026-06-09",
-            "source_name": "Saskatchewan RCMP",
-            "summary": "Warman RCMP received multiple reports of a vehicle driving erratically at high speeds near Highway 11 warman corridor.",
-            "raw_location_text": "Highway 11 near Warman, SK"
-        }
-    ]
-    for item in simulated_data:
-        process_item(conn, item)
-
 def ingest_saskatchewan_rcmp_news(conn):
     url = "https://www.rcmp-grc.gc.ca/en/rss/39" # Saskatchewan RCMP RSS feed
     print(f"Ingesting Saskatchewan RCMP News from {url}")
     
     xml_data = fetch_rss_feed(url)
     if not xml_data:
-        use_simulated_backup(conn)
         return
 
     items = []
@@ -94,7 +78,6 @@ def ingest_saskatchewan_rcmp_news(conn):
             items = []
 
     if not items:
-        use_simulated_backup(conn)
         return
 
     for title, original_url, pub_date, summary in items:

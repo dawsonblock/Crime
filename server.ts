@@ -9,11 +9,19 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { EventItem, SeverityType, LocationPrecisionType, SourceType } from "./src/types";
 import { CityAdaptor } from "./CityAdaptor";
 import { calculateThreatScore } from "./src/utils/scoring";
+import { ruleBasedClassifier } from "./src/utils/classifier";
+import { geocodeLocation } from "./src/utils/geo";
+import { fetchSaskatoonPoliceNews } from "./src/adapters/saskatoonPoliceNews";
+import { fetchSaskatchewanRCMPNews } from "./src/adapters/saskatchewanRCMPNews";
+import { fetchGovSaskNews } from "./src/adapters/govSaskNews";
 import fs from "fs";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { 
   getFirestore, doc, setDoc, getDoc, getDocs, collection, query, where, deleteDoc, writeBatch, limit, orderBy
 } from "firebase/firestore";
+import { deduplicateAndClusterEvents } from "./src/utils/dedupeEngine.ts";
+import { db as pgDb } from "./src/db/index.ts";
+import { rawItems as pgRawItems, canonicalIncidents as pgCanonicalIncidents } from "./src/db/schema.ts";
 
 dotenv.config();
 
@@ -91,7 +99,7 @@ function fetchWithSslBypass(urlStr: string, headers: Record<string, string> = {}
           "User-Agent": "Mozilla/5.0",
           ...headers,
         },
-        rejectUnauthorized: false, // Prevents "unable to verify the first certificate" error
+        rejectUnauthorized: true, // Enforce strict certificate verification
       };
 
       const req = https.request(options, (res) => {
@@ -824,12 +832,83 @@ async function syncEventsFromFirestore() {
   }
 }
 
+// Persists a verified, compliant incident to Postgres + PostGIS database
+async function saveIncidentToPostgres(evt: EventItem) {
+  try {
+    const resolvedSourceKey = evt.sourceKey || "saskatoon_police_news";
+    const isVerified = evt.isVerified !== undefined ? evt.isVerified : configSources.some(s => s.key === resolvedSourceKey);
+    const publishedDate = new Date(evt.publishedAt);
+    const retrievedDate = evt.retrievedAt ? new Date(evt.retrievedAt) : new Date();
+    const createdDate = evt.createdAt ? new Date(evt.createdAt) : new Date();
+
+    // Raw Items Sync
+    const rawId = `raw-${evt.id}`;
+    await pgDb.insert(pgRawItems)
+      .values({
+        id: rawId,
+        sourceKey: resolvedSourceKey,
+        title: evt.title,
+        summary: evt.summary,
+        originalUrl: evt.originalUrl,
+        publishedAt: publishedDate,
+        retrievedAt: retrievedDate
+      })
+      .onConflictDoNothing();
+
+    // PostGIS Point geometry: SRID=4326;POINT(longitude latitude)
+    const geomWkt = `SRID=4326;POINT(${evt.longitude} ${evt.latitude})`;
+
+    // Canonical Incidents Sync
+    await pgDb.insert(pgCanonicalIncidents)
+      .values({
+        id: evt.id,
+        sourceKey: resolvedSourceKey,
+        sourceName: evt.sourceName || "Unknown Source",
+        sourceType: evt.sourceType || "official",
+        title: evt.title,
+        summary: evt.summary,
+        originalUrl: evt.originalUrl,
+        publishedAt: publishedDate,
+        retrievedAt: retrievedDate,
+        eventType: evt.eventType || "other_public_safety",
+        severity: evt.severity || "medium",
+        confidence: evt.confidence || 0.90,
+        locationText: evt.locationText || "Saskatchewan, Canada",
+        latitude: evt.latitude,
+        longitude: evt.longitude,
+        locationPrecision: evt.locationPrecision || "unknown",
+        locationConfidence: evt.locationConfidence || 0.90,
+        sourceHash: evt.sourceHash || `hash-${evt.id}`,
+        createdAt: createdDate,
+        threatScore: evt.threatScore || 0,
+        isVerified: isVerified,
+        geom: geomWkt
+      })
+      .onConflictDoUpdate({
+        target: pgCanonicalIncidents.id,
+        set: {
+          title: evt.title,
+          summary: evt.summary,
+          severity: evt.severity || "medium",
+          threatScore: evt.threatScore || 0,
+          geom: geomWkt
+        }
+      });
+    console.log(`[Postgres Sync] Successfully geocoded and imported canonical incident #${evt.id} to PostGIS.`);
+  } catch (err: any) {
+    console.warn(`[Postgres Sync Warning] Could not save incident #${evt.id} directly to PostGIS database: ${err.message}`);
+  }
+}
+
 // Persists a verified, compliant incident to Firestore canonical_incidents and registers its unmodified form in raw_items
 async function saveIncident(evt: EventItem) {
   // First, prepend to in-memory Cache
   if (!events.some(e => e.id === evt.id)) {
     events.unshift(evt);
   }
+  
+  // Direct Postgres / PostGIS Mirror Storage Ingestion
+  await saveIncidentToPostgres(evt);
   
   if (db) {
     try {
@@ -1082,538 +1161,8 @@ function extractLocationText(text: string): string {
   return "Saskatoon, SK";
 }
 
-// Core Rule-Based Threat Classifier
-function ruleBasedClassifier(title: string, summary: string): { eventType: string; severity: SeverityType; confidence: number } {
-  const combined = (title + " " + summary).toLowerCase();
-  
-  const rules = [
-    {
-      type: "homicide",
-      keywords: /\b(homicide|murder|manslaughter|killing|slaying|deceased person|suspicious death|dead body)\b|found dead/i,
-      severity: "critical" as SeverityType,
-      confidence: 0.95
-    },
-    {
-      type: "shooting",
-      keywords: /\b(shooting|shot|shots fired|gunshot|discharged firearm|opened fire|bullet wound)\b/i,
-      severity: "critical" as SeverityType,
-      confidence: 0.95
-    },
-    {
-      type: "dangerous_person_alert",
-      keywords: /\b(dangerous person|active threat|shelter in place|shelter immediately|secure doors|barricaded|hostage|armed threat|alert: dangerous)\b/i,
-      severity: "critical" as SeverityType,
-      confidence: 0.95
-    },
-    {
-      type: "stabbing",
-      keywords: /\b(stabbing|stabbed|knife attack|slashed|blade wound|stabbing incident)\b/i,
-      severity: "high" as SeverityType,
-      confidence: 0.90
-    },
-    {
-      type: "assault",
-      keywords: /\b(assault|assaulted|physical fight|beaten|assaulting|attacked|domestic dispute|punched|kicked|battery)\b/i,
-      severity: "high" as SeverityType,
-      confidence: 0.85
-    },
-    {
-      type: "robbery",
-      keywords: /\b(robbery|robbed|armed robbery|mugg|mugging|heist|commercial robbery|bank robbery|demand cash|hold up|holdup)\b/i,
-      severity: "high" as SeverityType,
-      confidence: 0.90
-    },
-    {
-      type: "weapons",
-      keywords: /\b(weapons|firearms|pistol|revolver|shotgun|rifle|handgun|bullet|ammunition|body armour|body armor|illegal gun|seized gun|confiscated weapon|taser)\b/i,
-      severity: "high" as SeverityType,
-      confidence: 0.85
-    },
-    {
-      type: "police_operation",
-      keywords: /\b(police operation|tactical search|heavy police presence|tactical unit|police perimeter|tactical officers|swat|blocked off|k9 unit|police dog|negotiators)\b/i,
-      severity: "high" as SeverityType,
-      confidence: 0.85
-    },
-    {
-      type: "missing_person",
-      keywords: /\b(missing person|missing youth|missing teenager|missing girl|missing boy|disappeared|locate vulnerable|wander|missing senior|missing adult)\b/i,
-      severity: "high" as SeverityType,
-      confidence: 0.90
-    },
-    {
-      type: "break_and_enter",
-      keywords: /\b(break and enter|break-and-enter|break & enter|b&e|burglary|burgle|residential alarm|broke into|forced entry|commercial break-in)\b/i,
-      severity: "medium" as SeverityType,
-      confidence: 0.90
-    },
-    {
-      type: "vehicle_theft",
-      keywords: /\b(vehicle theft|stolen vehicle|car theft|stolen truck|car stolen|truck stolen|tractor theft|stolen tractor|auto theft|stolen auto)\b/i,
-      severity: "medium" as SeverityType,
-      confidence: 0.90
-    },
-    {
-      type: "drugs",
-      keywords: /\b(drugs|meth|methamphetamine|fentanyl|cocaine|trafficking|seizure of drugs|drug bust|substances|drug charges|illicit compounds|drug possession)\b/i,
-      severity: "medium" as SeverityType,
-      confidence: 0.90
-    },
-    {
-      type: "wanted_person",
-      keywords: /\b(wanted|warrant|wanted person|wanted suspect|suspect wanted|fugitive|outstanding warrants|seek public assistance to find|wanted on province)\b/i,
-      severity: "medium" as SeverityType,
-      confidence: 0.90
-    },
-    {
-      type: "sirt_investigation",
-      keywords: /\b(sirt|serious incident response|sirt investigation|police arrest review|detention inquiry|officer review|custody investig|independent inquiry)\b/i,
-      severity: "medium" as SeverityType,
-      confidence: 0.95
-    },
-    {
-      type: "fire",
-      keywords: /\b(fire|wildfire|smoke|blaze|structure fire|arson|burning|firefighter|engulfed)\b/i,
-      severity: "medium" as SeverityType,
-      confidence: 0.90
-    },
-    {
-      type: "traffic_collision",
-      keywords: /\b(traffic collision|pileup|accident|roll-over|crash|car accident|vehicle crash|highway closure|multi-vehicle|collision warnings)\b/i,
-      severity: "low" as SeverityType,
-      confidence: 0.90
-    },
-    {
-      type: "public_disorder",
-      keywords: /\b(public disorder|disturbance|dispute|protest|riot|rowdy|public intoxication|trespass|trespassing|brawl|street fight|vandalism|property damage)\b/i,
-      severity: "low" as SeverityType,
-      confidence: 0.85
-    }
-  ];
 
-  for (const rule of rules) {
-    if (rule.keywords.test(combined)) {
-      return {
-        eventType: rule.type,
-        severity: rule.severity,
-        confidence: rule.confidence
-      };
-    }
-  }
-
-  // Fallback if no category matches
-  return {
-    eventType: "other_public_safety",
-    severity: "low" as SeverityType,
-    confidence: 0.50
-  };
-}
-
-// Core Geocoding Integration (Nominatim and Mapbox) with privacy protection features
-async function geocodeLocation(addressText: string, sourceKey: string): Promise<{
-  latitude: number;
-  longitude: number;
-  displayLatitude: number;
-  displayLongitude: number;
-  locationPrecision: LocationPrecisionType;
-  locationConfidence: number;
-  locationText: string;
-}> {
-  const isOfficialMap = (sourceKey === "saskatoon_crime_map");
-  let determinedPrecision: LocationPrecisionType = "unknown";
-  const lowerAddress = addressText.toLowerCase();
-
-  // Inspect semantic indicators from addressText to assign early precision assessment
-  if (lowerAddress.includes("&") || lowerAddress.includes(" and ") || lowerAddress.includes(" at ") || lowerAddress.includes("near") || lowerAddress.includes(" / ")) {
-    determinedPrecision = "intersection";
-  } else if (lowerAddress.includes("block of") || lowerAddress.includes("block")) {
-    determinedPrecision = "block";
-  } else if (lowerAddress.includes("neighbourhood") || lowerAddress.includes("district") || lowerAddress.includes("ward") || lowerAddress.includes("area") || lowerAddress.includes("park") || lowerAddress.includes("crossing") || lowerAddress.includes("hill") || lowerAddress.includes("sutherland") || lowerAddress.includes("nutana") || lowerAddress.includes("pleasant h")) {
-    determinedPrecision = "neighbourhood";
-  } else if (lowerAddress.includes("saskatchewan") || lowerAddress.includes("saskatoon") || lowerAddress.includes("regina") || lowerAddress.includes("prince albert") || lowerAddress.includes("warman") || lowerAddress.includes("dundurn") || lowerAddress.includes("la ronge") || lowerAddress.includes("swift current") || lowerAddress.includes("north battleford")) {
-    determinedPrecision = "city";
-  }
-
-  const exactPattern = /\b([0-9]{1,5})\s+([a-zA-Z]{3,})\s+(avenue|ave|street|st|road|rd|crescent|cres|drive|dr|way|lane|ln|court|ct|boulevard|blvd)\b/i;
-  const matchExact = addressText.match(exactPattern);
-  if (matchExact && determinedPrecision === "unknown") {
-    determinedPrecision = "exact";
-  }
-
-  let query = addressText;
-  if (!lowerAddress.includes("saskatchewan") && !lowerAddress.includes("sk") && !lowerAddress.includes("saskatoon")) {
-    query = `${addressText}, Saskatoon, SK, Canada`;
-  } else if (!lowerAddress.includes("canada")) {
-    query = `${addressText}, Canada`;
-  }
-
-  let lat = 52.1332;
-  let lng = -106.6700;
-  let conf = 0.50;
-  let successGeocoding = false;
-
-  const mapboxToken = process.env.MAPBOX_ACCESS_TOKEN;
-
-  if (mapboxToken) {
-    try {
-      console.log(`[Geocoding API] Contacting Mapbox Geocoding API for: "${query}"`);
-      const mapboxUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${mapboxToken}&limit=1`;
-      const response = await fetch(mapboxUrl);
-      if (response.ok) {
-        const data = await response.json();
-        if (data && data.features && data.features.length > 0) {
-          const feature = data.features[0];
-          lng = feature.center[0];
-          lat = feature.center[1];
-          conf = feature.relevance ? Math.round(feature.relevance * 100) / 100 : 0.85;
-          successGeocoding = true;
-          console.log(`[Geocoding API] Mapbox successful match: ${lat}, ${lng} (Confidence: ${conf})`);
-          
-          if (feature.place_type && feature.place_type.includes("address")) {
-            determinedPrecision = "exact";
-          } else if (feature.place_type && feature.place_type.includes("neighborhood")) {
-            determinedPrecision = "neighbourhood";
-          } else if (feature.place_type && feature.place_type.includes("place")) {
-            determinedPrecision = "city";
-          }
-        }
-      }
-    } catch (err) {
-      console.error(`[Geocoding API] Mapbox Service connection error:`, err);
-    }
-  }
-
-  // Fallback to Nominatim if Mapbox is not present or failed
-  if (!successGeocoding) {
-    try {
-      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`;
-      console.log(`[Geocoding API] Contacting Nominatim OpenStreetMap for: "${query}"`);
-      const response = await fetch(url, {
-        headers: {
-          "User-Agent": "SaskatoonSafetyMap/2.0 (BlockDawson@gmail.com)"
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (Array.isArray(data) && data.length > 0) {
-          const result = data[0];
-          lat = parseFloat(result.lat);
-          lng = parseFloat(result.lon);
-          
-          const importance = result.importance ? parseFloat(result.importance) : 0.5;
-          conf = Math.round((0.5 + 0.5 * importance) * 100) / 100;
-          successGeocoding = true;
-          console.log(`[Geocoding API] Nominatim successful coordinates match: ${lat}, ${lng} (Confidence: ${conf})`);
-
-          if (result.type === "house" || result._type === "house" || (result.class === "place" && result.type === "house")) {
-            determinedPrecision = "exact";
-          }
-        }
-      }
-    } catch (err) {
-      console.error(`[Geocoding API] Nominatim Service connection error:`, err);
-    }
-  }
-
-  // Fallback coordinates lookup if Nominatim/Mapbox were unreachable or returned empty array
-  if (!successGeocoding) {
-    const localCoords = resolveSaskatoonCoordinates(addressText);
-    lat = localCoords.lat;
-    lng = localCoords.lng;
-    conf = 0.65;
-    if (determinedPrecision === "unknown") {
-      determinedPrecision = "block";
-    }
-    console.log(`[Geocoding API] Applying local coordinate map backup to "${addressText}": ${lat}, ${lng}`);
-  }
-
-  let finalLocationText = addressText;
-
-  // Mask exact locations to block level, protecting privacy
-  if (determinedPrecision === "exact") {
-    if (matchExact) {
-      const numStr = matchExact[1];
-      const streetPart = matchExact[2] + " " + matchExact[3];
-      const num = parseInt(numStr, 10);
-      let roundedBlock = "0-100 block of";
-      if (num >= 100) {
-        roundedBlock = `${Math.floor(num / 100) * 100} block of`;
-      }
-      finalLocationText = addressText.replace(numStr, roundedBlock);
-    } else {
-      finalLocationText = addressText + " (Block-Level Approximation)";
-    }
-    determinedPrecision = "block";
-  }
-
-  let displayLat = lat;
-  let displayLng = lng;
-
-  // Handle precision-specific generalized rounding for display coordinates to protect individual privacy
-  if (determinedPrecision === "block" || determinedPrecision === "intersection") {
-    // Round to 3 decimal places (~110m accuracy)
-    displayLat = Math.round(lat * 1000) / 1000;
-    displayLng = Math.round(lng * 1000) / 1000;
-  } else if (determinedPrecision === "neighbourhood") {
-    // Round to 2 decimal places (~1.1km accuracy)
-    displayLat = Math.round(lat * 100) / 100;
-    displayLng = Math.round(lng * 100) / 100;
-  } else if (determinedPrecision === "city" || determinedPrecision === "unknown") {
-    // Round to 1 decimal place (~11km accuracy)
-    displayLat = Math.round(lat * 10) / 10;
-    displayLng = Math.round(lng * 10) / 10;
-  }
-
-  if (determinedPrecision === "unknown") {
-    determinedPrecision = "block";
-  }
-
-  return {
-    latitude: lat,
-    longitude: lng,
-    displayLatitude: displayLat,
-    displayLongitude: displayLng,
-    locationPrecision: determinedPrecision,
-    locationConfidence: conf,
-    locationText: finalLocationText
-  };
-}
-
-// Haversine distance calculator in meters
-function getDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371000; // meters
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
-
-// Related event types helper
-function areRelatedEventTypes(type1: string, type2: string): boolean {
-  if (type1 === type2) return true;
-  const groups = [
-    ["assault", "shooting", "stabbing", "weapons", "homicide", "robbery", "dangerous_person_alert", "police_operation"],
-    ["theft", "break_enter", "break_and_enter", "vehicle_theft", "property"],
-    ["traffic", "traffic_collision", "collision"]
-  ];
-  for (const group of groups) {
-    if (group.includes(type1) && group.includes(type2)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// Token Jaccard String overlapping similarity helper
-function calculateStringSimilarity(str1: string, str2: string): number {
-  const getTokens = (s: string) => s.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter(t => t.length > 2);
-  const tokens1 = new Set(getTokens(str1));
-  const tokens2 = new Set(getTokens(str2));
-  if (tokens1.size === 0 || tokens2.size === 0) return 0;
-  
-  let intersectionSize = 0;
-  tokens1.forEach(t => {
-    if (tokens2.has(t)) intersectionSize++;
-  });
-  
-  return intersectionSize / Math.max(tokens1.size, tokens2.size);
-}
-
-// Phase 2: Deduplication and Incident Clustering Algorithm
-function deduplicateAndClusterEvents(allEvents: EventItem[]): EventItem[] {
-  // Sort by published time descending
-  const sorted = [...allEvents].sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
-  
-  const mergedIds = new Set<string>();
-  const finalizedEvents: EventItem[] = [];
-  
-  for (let i = 0; i < sorted.length; i++) {
-    const primary = sorted[i];
-    if (mergedIds.has(primary.id)) continue;
-    
-    // Find all duplicates / candidates for merging
-    // A target candidate MUST represent the exact same incident reported across multiple sources.
-    const clusterCandidates: EventItem[] = [primary];
-    
-    for (let j = i + 1; j < sorted.length; j++) {
-      const candidate = sorted[j];
-      if (mergedIds.has(candidate.id)) continue;
-      
-      // Calculate proximity rules:
-      const dist = getDistanceMeters(primary.latitude, primary.longitude, candidate.latitude, candidate.longitude);
-      
-      // Tighten geographic rules based on precision to avoid spatial grouping errors
-      // exact: very close (<100m)
-      // block/intersection: close (<200m)
-      // neighbourhood: moderate (<500m) + strict text match
-      // city/unknown: almost never merged unless text is near-identical
-      let maxDistThreshold = 200;
-      if (primary.locationPrecision === "exact" && candidate.locationPrecision === "exact") {
-        maxDistThreshold = 100;
-      } else if (primary.locationPrecision === "neighbourhood" || candidate.locationPrecision === "neighbourhood") {
-        maxDistThreshold = 500;
-      } else if (primary.locationPrecision === "city" || candidate.locationPrecision === "city") {
-        maxDistThreshold = 50; // Only merge if nearly identical location geocodes
-      }
-
-      const isCloseGeographically = dist <= maxDistThreshold;
-      
-      // Tighten time window: 16 hours instead of 24h
-      const timeDiffMs = Math.abs(new Date(primary.publishedAt).getTime() - new Date(candidate.publishedAt).getTime());
-      const isWithinTimeWindow = timeDiffMs < 16 * 3600 * 1000;
-      
-      // Same publisher protection:
-      // If candidate has the same sourceKey as primary (meaning same feed/organization), they represent separate 
-      // reports within the same region, UNLESS they are absolute identical scraped duplicate entries (sim > 0.85).
-      const shareSameSource = primary.sourceKey === candidate.sourceKey;
-      
-      // Related event types
-      const isRelatedType = areRelatedEventTypes(primary.eventType, candidate.eventType);
-      
-      // Semantic string similarity (Jaccard token comparison)
-      const sim = calculateStringSimilarity(primary.title + " " + primary.summary, candidate.title + " " + candidate.summary);
-      
-      // FUSION RULES:
-      // To fuse into a single canonical incident, they must:
-      // 1. Be geographically close & in time window
-      // 3. Have related types and at least solid semantic text confirmation (sim > 0.30) OR representing true different source corroboration (e.g. news mentioning police alert) with strong text match
-      
-      let isSameEvent = false;
-      if (isCloseGeographically && isWithinTimeWindow) {
-        if (shareSameSource) {
-          // If from the same source, they are only duplicate records if text matches near-perfectly
-          if (sim > 0.82) {
-            isSameEvent = true;
-          }
-        } else {
-          // Cross-source intelligence corroboration:
-          // Must have matching related categories AND a reasonable semantic overlapping context
-          if (isRelatedType && (sim > 0.28 || primary.title.split(" ").some(word => word.length > 4 && candidate.title.includes(word)))) {
-            isSameEvent = true;
-          } else if (sim > 0.40) {
-            // Excellent text match (e.g. media article detailing a specific police operation at same block)
-            isSameEvent = true;
-          }
-        }
-      }
-      
-      if (isSameEvent) {
-        clusterCandidates.push(candidate);
-        mergedIds.add(candidate.id);
-      }
-    }
-    
-    mergedIds.add(primary.id);
-    
-    if (clusterCandidates.length === 1) {
-      primary.sourcesList = [{ name: primary.sourceName, url: primary.originalUrl, key: primary.sourceKey }];
-      primary.dedupeHash = primary.sourceHash || ("single-hash-" + primary.id);
-      primary.linkedEvents = []; // Avoid circular [primary] self-reference
-      finalizedEvents.push(primary);
-    } else {
-      // Gather unique sources list
-      const sourcesListMap = new Map<string, { name: string; url: string; key: string }>();
-      clusterCandidates.forEach(c => {
-        sourcesListMap.set(c.sourceKey, { name: c.sourceName, url: c.originalUrl, key: c.sourceKey });
-      });
-      const sourcesList = Array.from(sourcesListMap.values());
-      
-      // Choose primary item for coordinates/metadata (prefer police alerts over standard map reports)
-      const selectPriority = (item: EventItem) => {
-        if (item.sourceKey.includes("alert")) return 10;
-        if (item.sourceType === "official" && item.sourceKey !== "saskatoon_crime_map") return 8;
-        if (item.sourceType === "media") return 6;
-        if (item.sourceType === "government") return 5;
-        return 1;
-      };
-      
-      const bestEvent = clusterCandidates.reduce((best, curr) => {
-        return selectPriority(curr) > selectPriority(best) ? curr : best;
-      }, primary);
-      
-      // Blended severity instead of "highest member wins" inflation!
-      // Assign weight values to Candidate severities
-      const severityMap: Record<SeverityType, number> = { critical: 4, high: 3, medium: 2, low: 1 };
-      const reverseSeverityMap: Record<number, SeverityType> = { 4: "critical", 3: "high", 2: "medium", 1: "low" };
-      
-      let sumSeverityWeights = 0;
-      clusterCandidates.forEach(c => {
-        sumSeverityWeights += severityMap[c.severity] || 1;
-      });
-      const avgSeverityWeight = Math.round(sumSeverityWeights / clusterCandidates.length);
-      const blendedSeverity = reverseSeverityMap[Math.max(1, Math.min(4, avgSeverityWeight))] || "low";
-      
-      // Assemble aggregated summary detailing original sources
-      let combinedSummary = `**Saskatoon Public Safety Intelligence Fusion [${clusterCandidates.length} linked reports]**:\n`;
-      clusterCandidates.forEach(c => {
-        combinedSummary += `• **${c.sourceName}**: *${c.title}* – ${c.summary.length > 155 ? c.summary.substring(0, 155) + "..." : c.summary}\n`;
-      });
-      
-      // Boost confidence as multiple sources confirm
-      const blendedConfidence = Math.min(1.0, Math.round((bestEvent.confidence + 0.05 * (clusterCandidates.length - 1)) * 100) / 100);
-      
-      // Clean clone of candidates to strip any potential nested circular structures
-      const cleanCandidates = clusterCandidates.map(c => {
-        const copy = { ...c };
-        delete copy.linkedEvents;
-        return copy;
-      });
-
-      const mergedEvent: EventItem = {
-        ...bestEvent,
-        id: `clust-${bestEvent.id}`,
-        title: bestEvent.title.includes("Cluster") ? bestEvent.title : `${bestEvent.title} (Incident Cluster)`,
-        summary: combinedSummary,
-        severity: blendedSeverity, // true blended severity, no inflation!
-        confidence: blendedConfidence,
-        sourcesList: sourcesList,
-        dedupeHash: `fused-${bestEvent.id}-${clusterCandidates.length}`,
-        linkedEvents: cleanCandidates
-      };
-      
-      finalizedEvents.push(mergedEvent);
-    }
-  }
-  
-  // Map intelligence metrics, source tiers, and derived annotations
-  return finalizedEvents.map(evt => {
-    let sourceTier = 3; // Default Tier is 3 (Advisories / Map Layers)
-    let isGenerated = false;
-    let isDerived = false;
-
-    const key = (evt.sourceKey || "").toLowerCase();
-    const type = (evt.sourceType || "").toLowerCase();
-    const idStr = (evt.id || "").toLowerCase();
-    const title = (evt.title || "").toLowerCase();
-
-    // Determine Source Intelligence Tier
-    if (idStr.startsWith("clust-") || title.includes("(incident cluster)") || title.includes("cluster") || key.includes("ai-")) {
-      sourceTier = 4;
-      isDerived = true;
-      isGenerated = true;
-    } else if (type === "official" && !key.includes("crime_map") && !key.includes("council")) {
-      sourceTier = 1;
-    } else if (type === "media") {
-      sourceTier = 2;
-    } else if (type === "government" || key.includes("crime") || key.includes("map") || key.includes("weather") || key.includes("council")) {
-      sourceTier = 3;
-    }
-
-    return {
-      ...evt,
-      sourceTier,
-      isGenerated: evt.isGenerated || isGenerated,
-      isDerived: evt.isDerived || isDerived,
-    };
-  });
-}
+// Old helper engines and algorithms have been cleanly refactored out to /src/utils/dedupeEngine.ts 
 
 // ---------------- API ENDPOINTS ----------------
 
@@ -2547,147 +2096,77 @@ app.post("/api/ingest/run", async (req, res) => {
     }
 
     // 3. Demo simulated generation (Only if DEMO_MODE environment is explicitly flagged true)
-    const isDemoActive = DEMO_MODE || req.body?.demo === true || req.query?.demo === "true";
+    const isDemoActive = DEMO_MODE;
     if (isDemoActive) {
       console.log("[Ingestion Engine] Ingestion active in DEMO_MODE. Loading simulated backup/seed safety warnings...");
-      if (!isApiKeyConfigured) {
-        const rawSeeds = [
-          {
-            id: "evt-sim-101",
-            sourceKey: "saskatoon_police_news",
-            sourceName: "Saskatoon Police News (Demo)",
-            sourceType: "official" as SourceType,
-            title: "Active Stabbing Incident Inquiry on 8th Street East",
-            summary: "Officers cordoned off a gas station entrance following a broad-daylight stabbing event. One victim transported in stable condition. Search continues for matching suspect vest description.",
-            originalUrl: "https://saskatoonpolice.ca/news/simulated-stabbing-8th",
-            publishedAt: new Date().toISOString(),
-            locationText: "860 8th Street East, Saskatoon, SK"
-          },
-          {
-            id: "evt-sim-102",
-            sourceKey: "rcmp_saskatchewan_news",
-            sourceName: "Saskatchewan RCMP News (Demo)",
-            sourceType: "official" as SourceType,
-            title: "Dangerous Driver Alert Near Warman Corridor",
-            summary: "RCMP dispatched units targeting reports of an erratically maneuvering truck transport heading north. Motorists advised to practice absolute defensive safety cautions.",
-            originalUrl: "https://www.rcmp-grc.gc.ca/en/news/2026/warman-dangerous-driver",
-            publishedAt: new Date(Date.now() - 45 * 60000).toISOString(),
-            locationText: "Highway 11 near Warman, SK"
-          },
-          {
-            id: "evt-sim-103",
-            sourceKey: "saskatchewan_gov_news",
-            sourceName: "Saskatchewan Government / SIRT (Demo)",
-            sourceType: "government" as SourceType,
-            title: "SIRT Commences Inquiry into Prince Albert Detention Incident",
-            summary: "The Serious Incident Response Team confirmed launch of a transparent public inquiry following a residential detention security event report in Northern Saskatchewan district.",
-            originalUrl: "https://www.saskatchewan.ca/government/news-and-media/sirt-pa-detention",
-            publishedAt: new Date(Date.now() - 90 * 60000).toISOString(),
-            locationText: "Prince Albert Provincial Correction Complex, SK"
-          }
-        ];
-
-        const processedSeeds: EventItem[] = [];
-        for (const raw of rawSeeds) {
-          const geocoded = await geocodeLocation(raw.locationText, raw.sourceKey);
-          const classified = ruleBasedClassifier(raw.title, raw.summary);
-          
-          processedSeeds.push({
-            id: raw.id,
-            sourceKey: raw.sourceKey,
-            sourceName: raw.sourceName,
-            sourceType: raw.sourceType,
-            title: raw.title,
-            summary: raw.summary,
-            originalUrl: raw.originalUrl,
-            publishedAt: raw.publishedAt,
-            retrievedAt: new Date().toISOString(),
-            eventType: classified.eventType,
-            severity: classified.severity,
-            confidence: classified.confidence,
-            locationText: geocoded.locationText,
-            latitude: geocoded.latitude, displayLatitude: geocoded.displayLatitude,
-            longitude: geocoded.longitude, displayLongitude: geocoded.displayLongitude,
-            locationPrecision: geocoded.locationPrecision,
-            locationConfidence: geocoded.locationConfidence,
-            sourceHash: "simulated-hash-" + raw.id,
-            createdAt: new Date().toISOString()
-          });
+      const rawSeeds = [
+        {
+          id: "evt-sim-101",
+          sourceKey: "saskatoon_police_news",
+          sourceName: "Saskatoon Police News (Demo)",
+          sourceType: "official" as SourceType,
+          title: "Active Stabbing Incident Inquiry on 8th Street East",
+          summary: "Officers cordoned off a gas station entrance following a broad-daylight stabbing event. One victim transported in stable condition. Search continues for matching suspect vest description.",
+          originalUrl: "https://saskatoonpolice.ca/news/simulated-stabbing-8th",
+          publishedAt: new Date().toISOString(),
+          locationText: "860 8th Street East, Saskatoon, SK"
+        },
+        {
+          id: "evt-sim-102",
+          sourceKey: "rcmp_saskatchewan_news",
+          sourceName: "Saskatchewan RCMP News (Demo)",
+          sourceType: "official" as SourceType,
+          title: "Dangerous Driver Alert Near Warman Corridor",
+          summary: "RCMP dispatched units targeting reports of an erratically maneuvering truck transport heading north. Motorists advised to practice absolute defensive safety cautions.",
+          originalUrl: "https://www.rcmp-grc.gc.ca/en/news/2026/warman-dangerous-driver",
+          publishedAt: new Date(Date.now() - 45 * 60000).toISOString(),
+          locationText: "Highway 11 near Warman, SK"
+        },
+        {
+          id: "evt-sim-103",
+          sourceKey: "saskatchewan_gov_news",
+          sourceName: "Saskatchewan Government / SIRT (Demo)",
+          sourceType: "government" as SourceType,
+          title: "SIRT Commences Inquiry into Prince Albert Detention Incident",
+          summary: "The Serious Incident Response Team confirmed launch of a transparent public inquiry following a residential detention security event report in Northern Saskatchewan district.",
+          originalUrl: "https://www.saskatchewan.ca/government/news-and-media/sirt-pa-detention",
+          publishedAt: new Date(Date.now() - 90 * 60000).toISOString(),
+          locationText: "Prince Albert Provincial Correction Complex, SK"
         }
+      ];
 
-        for (const item of processedSeeds) {
-          if (!events.some(e => e.id === item.id) && isIncidentCompliant(item)) {
-            await saveIncident(item);
-            addedList.push(item);
-          }
-        }
-      } else {
-        const ai = getGenAI();
-        const prompt = `Simulate an ingestion crawl of Saskatoon Police bulletins, Saskatchewan RCMP notices, and Government SIRT press statements from June 2026.
-Generate exactly 3 brand-new, highly realistic public safety incident events that could have occurred in Saskatoon, Saskatchewan within the last 24 hours.
-Your structured output must match the array schemas. Ensure coordinates are placed around Saskatoon (lat: ~52.13, lng: ~-106.67) or major Saskatchewan municipalities.
-Use actual local Saskatoon landmarks (e.g., Preston Crossing, Stonebridge, Spadina Crescent, Circle Drive, Idylwyld Dr, 22nd Street West, etc.) for authentic geocoding.`;
-
-        const aiResponse = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: prompt,
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  title: { type: Type.STRING, description: "Sucinct headline" },
-                  summary: { type: Type.STRING, description: "1-2 sentence descriptive safety summary" },
-                  eventType: { type: Type.STRING, description: "Incident classification category" },
-                  severity: { type: Type.STRING, description: "low, medium, high, critical" },
-                  locationText: { type: Type.STRING, description: "Landmark, block name, or intersection" },
-                  latitude: { type: Type.NUMBER, description: "precise latitude" },
-                  longitude: { type: Type.NUMBER, description: "precise longitude" },
-                  locationPrecision: { type: Type.STRING, description: "exact, block, intersection, neighbourhood, city, unknown" },
-                  sourceKey: { type: Type.STRING, description: "saskatoon_police_news" },
-                  sourceName: { type: Type.STRING, description: "Saskatoon Police News" },
-                  sourceType: { type: Type.STRING, description: "official" }
-                },
-                required: ["title", "summary", "eventType", "severity", "locationText", "latitude", "longitude", "locationPrecision", "sourceKey", "sourceName", "sourceType"]
-              }
-            }
-          }
+      const processedSeeds: EventItem[] = [];
+      for (const raw of rawSeeds) {
+        const geocoded = await geocodeLocation(raw.locationText, raw.sourceKey);
+        const classified = ruleBasedClassifier(raw.title, raw.summary);
+        
+        processedSeeds.push({
+          id: raw.id,
+          sourceKey: raw.sourceKey,
+          sourceName: raw.sourceName,
+          sourceType: raw.sourceType,
+          title: raw.title,
+          summary: raw.summary,
+          originalUrl: raw.originalUrl,
+          publishedAt: raw.publishedAt,
+          retrievedAt: new Date().toISOString(),
+          eventType: classified.eventType,
+          severity: classified.severity,
+          confidence: classified.confidence,
+          locationText: geocoded.locationText,
+          latitude: geocoded.latitude, displayLatitude: geocoded.displayLatitude,
+          longitude: geocoded.longitude, displayLongitude: geocoded.displayLongitude,
+          locationPrecision: geocoded.locationPrecision,
+          locationConfidence: geocoded.locationConfidence,
+          sourceHash: "simulated-hash-" + raw.id,
+          createdAt: new Date().toISOString()
         });
+      }
 
-        const parsedArray = JSON.parse(aiResponse.text.trim());
-        for (const item of parsedArray) {
-          const customId = "evt-ingest-" + Math.random().toString(36).substr(2, 9);
-          const geocoded = await geocodeLocation(item.locationText || "Saskatoon, SK", item.sourceKey || "saskatoon_police_news");
-          const ruleClass = ruleBasedClassifier(item.title, item.summary);
-
-          const newEvt: EventItem = {
-            id: customId,
-            sourceKey: item.sourceKey || "saskatoon_police_news",
-            sourceName: item.sourceName || "Saskatoon Police News (Demo)",
-            sourceType: (item.sourceType || "official") as SourceType,
-            title: item.title,
-            summary: item.summary,
-            originalUrl: `https://saskatoonsafetymap.ca/demo-bulletins/bulletin-${Math.floor(Math.random() * 100000)}`,
-            publishedAt: new Date(Date.now() - Math.floor(Math.random() * 12 * 3600000)).toISOString(),
-            retrievedAt: new Date().toISOString(),
-            eventType: ruleClass.eventType || item.eventType || "other_public_safety",
-            severity: (ruleClass.severity || item.severity || "medium") as SeverityType,
-            confidence: ruleClass.confidence || 0.94,
-            locationText: geocoded.locationText,
-            latitude: geocoded.latitude, displayLatitude: geocoded.displayLatitude,
-            longitude: geocoded.longitude, displayLongitude: geocoded.displayLongitude,
-            locationPrecision: geocoded.locationPrecision,
-            locationConfidence: geocoded.locationConfidence,
-            sourceHash: `ingest-hash-${customId}`,
-            createdAt: new Date().toISOString()
-          };
-
-          if (isIncidentCompliant(newEvt)) {
-            await saveIncident(newEvt);
-            addedList.push(newEvt);
-          }
+      for (const item of processedSeeds) {
+        if (!events.some(e => e.id === item.id) && isIncidentCompliant(item)) {
+          await saveIncident(item);
+          addedList.push(item);
         }
       }
     }
@@ -3148,6 +2627,12 @@ async function fetchOtherMunicipalFeeds(): Promise<EventItem[]> {
 // Node-Python execution bridge function
 function runPythonAdapterIngestion(): Promise<EventItem[]> {
   return new Promise((resolve) => {
+    if (process.env.DEV_ADAPTERS !== "true") {
+      console.log("[Python Bridge] DEV_ADAPTERS environment variable is not set to true. Bypassing python crawling bridge.");
+      resolve([]);
+      return;
+    }
+
     console.log("[Python Bridge] Executing Python adapters (main.py)...");
     const pyDir = path.join(process.cwd(), "python_adapters");
     
@@ -3234,16 +2719,18 @@ async function startServer() {
   (async () => {
     try {
       console.log("[Startup] Loading Saskatchewan-wide live crime and RCMP news data in background...");
-      const [liveSaskatoon, newsSaskatoon, newsRegina, rcmpData, extraMuniData, pythonEvents] = await Promise.all([
+      const [liveSaskatoon, newsSaskatoon, rcmpData, spsData, govSaskData, newsRegina, extraMuniData, pythonEvents] = await Promise.all([
         fetchSaskatoonLiveCrimeData().catch(() => []),
         fetchSaskatoonNewsFeeds().catch(() => []),
+        fetchSaskatchewanRCMPNews().catch(() => []),
+        fetchSaskatoonPoliceNews().catch(() => []),
+        fetchGovSaskNews().catch(() => []),
         fetchReginaNewsFeeds().catch(() => []),
-        fetchSaskatchewanRCMPFeeds().catch(() => []),
         fetchOtherMunicipalFeeds().catch(() => []),
         runPythonAdapterIngestion().catch(() => []),
       ]);
       
-      const combined = [...liveSaskatoon, ...newsSaskatoon, ...newsRegina, ...rcmpData, ...extraMuniData, ...pythonEvents];
+      const combined = [...liveSaskatoon, ...newsSaskatoon, ...rcmpData, ...spsData, ...govSaskData, ...newsRegina, ...extraMuniData, ...pythonEvents];
       const newItems = combined.filter(newItem => {
         return !events.some(existing => existing.id === newItem.id || existing.sourceHash === newItem.sourceHash);
       });

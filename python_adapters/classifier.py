@@ -123,7 +123,7 @@ def geocode_nominatim(address_text):
         # Gentle 1 second delay to follow Nominatim guidelines and prevent server load
         time.sleep(1.0)
         
-        ctx = ssl._create_unverified_context()
+        ctx = ssl.create_default_context()
         with urllib.request.urlopen(req, context=ctx) as response:
             data = json.loads(response.read().decode('utf-8'))
             if data and isinstance(data, list) and len(data) > 0:

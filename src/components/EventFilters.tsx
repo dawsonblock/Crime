@@ -31,6 +31,7 @@ export interface FilterState {
   userLng: number | null;
   criticalOnly: boolean;
   sourceTiers: number[];
+  autoGroupEvents: boolean;
 }
 
 interface EventFiltersProps {
@@ -676,6 +677,31 @@ export default function EventFilters({
               : "bg-white border-slate-205 text-slate-500"
           }`}>
             {filters.criticalOnly ? "ACTIVE" : "OFF"}
+          </span>
+        </button>
+
+        {/* Auto-Group Incidents Toggle */}
+        <button
+          id="auto-group-toggle"
+          type="button"
+          onClick={() => onChange({ ...filters, autoGroupEvents: !filters.autoGroupEvents })}
+          className={`w-full flex items-center justify-between p-2.5 rounded border text-xs font-semibold cursor-pointer transition-all duration-150 ${
+            filters.autoGroupEvents
+              ? "bg-indigo-50 border-indigo-300 text-indigo-800 shadow-sm ring-1 ring-indigo-500/10"
+              : "bg-slate-50 border-slate-200 hover:bg-slate-100/70 text-slate-700"
+          }`}
+          title="Cluster/Group incidents that occur on the same block or intersection"
+        >
+          <div className="flex items-center gap-2">
+            <Layers size={13} className={filters.autoGroupEvents ? "text-indigo-650" : "text-slate-400"} />
+            <span>Auto-Group Block Incidents</span>
+          </div>
+          <span className={`font-mono text-[9px] uppercase font-extrabold px-1.5 py-0.5 rounded border leading-none transition-colors ${
+            filters.autoGroupEvents
+              ? "bg-indigo-600 border-indigo-755 text-white"
+              : "bg-white border-slate-205 text-slate-500"
+          }`}>
+            {filters.autoGroupEvents ? "ACTIVE" : "OFF"}
           </span>
         </button>
 
