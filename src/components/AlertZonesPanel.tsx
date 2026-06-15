@@ -31,6 +31,8 @@ interface AlertZonesPanelProps {
   selectedRouteId: string | null;
   setSelectedRouteId: (val: string | null) => void;
   onSelectRoute?: (route: CustomRouteItem) => void;
+  restrictHeatmapToZones: boolean;
+  setRestrictHeatmapToZones: (val: boolean) => void;
 }
 
 // Haversine distance calculator in meters
@@ -62,13 +64,15 @@ export default function AlertZonesPanel({
   selectedRouteId,
   setSelectedRouteId,
   onSelectRoute,
+  restrictHeatmapToZones,
+  setRestrictHeatmapToZones,
 }: AlertZonesPanelProps) {
   // Expand states
   const [expandedZoneId, setExpandedZoneId] = useState<string | null>(null);
   const [expandedRouteId, setExpandedRouteId] = useState<string | null>(null);
 
   // Tab control states: "zones" | "routes"
-  const [activeSubTab, setActiveSubTab] = useState<"zones" | "routes">("zones");
+  const [activeSubTab, setActiveSubTab] = useState<"zones" | "routes" | "routing">("zones");
 
   // Route comparison state
   const [compareRouteIdA, setCompareRouteIdA] = useState<string>("");
@@ -175,7 +179,34 @@ export default function AlertZonesPanel({
           <Route size={11} />
           <span>Corridors ({customRoutes.length})</span>
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            setActiveSubTab("routing");
+            setIsDrawingRoute(false);
+          }}
+          className={`flex-1 text-center py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+            activeSubTab === "routing"
+              ? "bg-indigo-600 text-white shadow-sm"
+              : "bg-slate-50 text-slate-600 border border-slate-200/50 hover:bg-slate-100/80"
+          }`}
+        >
+          <Waypoints size={11} />
+          <span>Routing</span>
+        </button>
       </div>
+
+      {activeSubTab === "zones" && (
+        <div className="flex items-center justify-between px-3 py-1 bg-slate-100/50 border-b border-slate-200">
+           <span className="text-[10px] font-bold text-slate-600 italic">Heatmap Layer Scope</span>
+           <button 
+             onClick={() => setRestrictHeatmapToZones(!restrictHeatmapToZones)}
+             className={`px-3 py-1 rounded text-[10px] font-bold cursor-pointer ${restrictHeatmapToZones ? 'bg-violet-600 text-white' : 'bg-slate-200 text-slate-700'}`}
+           >
+             {restrictHeatmapToZones ? "Zones Only" : "Global Trend"}
+           </button>
+        </div>
+      )}
 
       {/* Main List */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3 scrollbar-thin scrollbar-thumb-slate-200">
@@ -397,6 +428,38 @@ export default function AlertZonesPanel({
               })
             )}
           </>
+        )}
+
+        {/* TAB 3: ROUTE CALCULATION TOOL */}
+        {activeSubTab === "routing" && (
+          <div className="bg-white border border-indigo-200 rounded-xl p-4 space-y-4 animate-fadeIn shadow-sm">
+             <div className="text-center">
+               <h3 className="text-xs font-black text-indigo-900 uppercase tracking-widest leading-none">
+                 Safety Routing
+               </h3>
+               <p className="text-[10px] text-slate-500 mt-1">
+                 Calculate paths that prioritize safety.
+               </p>
+             </div>
+             
+             <div className="space-y-3">
+               <div>
+                 <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Start Address</label>
+                 <input type="text" className="w-full text-xs border border-slate-200 rounded p-2 focus:border-indigo-500 outline-none" placeholder="Enter start..."/>
+               </div>
+               <div>
+                 <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block mb-1">End Address</label>
+                 <input type="text" className="w-full text-xs border border-slate-200 rounded p-2 focus:border-indigo-500 outline-none" placeholder="Enter destination..."/>
+               </div>
+               <div className="flex items-center gap-2">
+                 <input type="checkbox" id="avoid-high"/>
+                 <label htmlFor="avoid-high" className="text-[10px] font-bold text-slate-700">Avoid high-incident/critical areas</label>
+               </div>
+               <button className="w-full bg-indigo-600 text-white text-xs font-bold py-2 rounded-lg hover:bg-indigo-700 transition-colors">
+                 Calculate Route
+               </button>
+             </div>
+          </div>
         )}
 
         {/* TAB 2: ACTIVE CORRIDOR TRAFFIC CHANNELS */}

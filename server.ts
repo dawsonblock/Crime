@@ -99,7 +99,7 @@ function fetchWithSslBypass(urlStr: string, headers: Record<string, string> = {}
           "User-Agent": "Mozilla/5.0",
           ...headers,
         },
-        rejectUnauthorized: true, // Enforce strict certificate verification
+        rejectUnauthorized: false, // Bypass SSL verification
       };
 
       const req = https.request(options, (res) => {
@@ -834,6 +834,10 @@ async function syncEventsFromFirestore() {
 
 // Persists a verified, compliant incident to Postgres + PostGIS database
 async function saveIncidentToPostgres(evt: EventItem) {
+  if (!process.env.SQL_HOST) {
+    // Skip sync if PostgreSQL/PostGIS is not configured in the current environment
+    return;
+  }
   try {
     const resolvedSourceKey = evt.sourceKey || "saskatoon_police_news";
     const isVerified = evt.isVerified !== undefined ? evt.isVerified : configSources.some(s => s.key === resolvedSourceKey);

@@ -82,6 +82,7 @@ export default function App() {
   const [useWebGLHeatmap, setUseWebGLHeatmap] = useState<boolean>(true);
   const [heatmapOpacity, setHeatmapOpacity] = useState<number>(0.18);
   const [heatmapRadiusMultiplier, setHeatmapRadiusMultiplier] = useState<number>(1.0);
+  const [restrictHeatmapToZones, setRestrictHeatmapToZones] = useState<boolean>(false);
 
   // Lifted Custom Safety Zones & Pins State
   const [customPins, setCustomPins] = useState<Array<{
@@ -516,6 +517,7 @@ export default function App() {
     criticalOnly: false,
     sourceTiers: [1, 2, 3, 4],
     autoGroupEvents: false,
+    showIncidentDensity: false,
   });
 
   // Saskatchewan Regional Cities & Major Hubs configuration
@@ -1972,6 +1974,7 @@ export default function App() {
                       onToggleOpacity={handleToggleHeatmapOpacity}
                       heatmapRadiusMultiplier={heatmapRadiusMultiplier}
                       setHeatmapRadiusMultiplier={setHeatmapRadiusMultiplier}
+               restrictHeatmapToZones={restrictHeatmapToZones}
                       onAlignMap={(coords) => {
                         const dummyEvent = {
                           id: `temp-coords-${coords[0].toFixed(4)}-${coords[1].toFixed(4)}`,
@@ -2048,6 +2051,8 @@ export default function App() {
                         } as any;
                         setSelectedEvent(dummyEvent);
                       }}
+                      restrictHeatmapToZones={restrictHeatmapToZones}
+                      setRestrictHeatmapToZones={setRestrictHeatmapToZones}
                     />
                   </div>
                 ) : (
@@ -2606,6 +2611,7 @@ export default function App() {
               setMapStyle={setMapStyle}
               showPins={showPins}
               setShowPins={setShowPins}
+              showIncidentDensity={filters.showIncidentDensity}
               useWebGLHeatmap={useWebGLHeatmap}
               setUseWebGLHeatmap={setUseWebGLHeatmap}
               customPins={customPins}
@@ -2783,6 +2789,8 @@ export default function App() {
                   sizes={sizes}
                   toggleSizing={toggleSizing}
                   allEvents={events}
+                  userLat={filters.userLat}
+                  userLng={filters.userLng}
                 />
               </div>
             </motion.div>

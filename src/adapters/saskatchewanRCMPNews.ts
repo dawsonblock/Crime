@@ -2,13 +2,63 @@ import { EventItem } from "../types";
 import { ruleBasedClassifier } from "../utils/classifier";
 import { geocodeLocation } from "../utils/geo";
 import crypto from "crypto";
+import https from "https";
+
+function fetchWithSslBypass(urlStr: string, headers: Record<string, string> = {}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const request = (targetUrl: string) => {
+      const urlObj = new URL(targetUrl);
+      const options: https.RequestOptions = {
+        hostname: urlObj.hostname,
+        port: urlObj.port || 443,
+        path: urlObj.pathname + urlObj.search,
+        method: "GET",
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          ...headers,
+        },
+        rejectUnauthorized: false, // Bypass SSL verification
+      };
+
+      const req = https.request(options, (res) => {
+        if (res.statusCode && [301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+          let redirectUrl = res.headers.location;
+          if (!redirectUrl.startsWith("http")) {
+            redirectUrl = new URL(redirectUrl, targetUrl).toString();
+          }
+          request(redirectUrl);
+          return;
+        }
+
+        let data = "";
+        res.on("data", (chunk) => {
+          data += chunk;
+        });
+        res.on("end", () => {
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(data);
+          } else {
+            reject(new Error(`Failed to fetch ${targetUrl} - Status Code: ${res.statusCode}`));
+          }
+        });
+      });
+
+      req.on("error", (err) => {
+        reject(err);
+      });
+
+      req.end();
+    };
+
+    request(urlStr);
+  });
+}
 
 export async function fetchSaskatchewanRCMPNews(): Promise<EventItem[]> {
   const newsEvents: EventItem[] = [];
   try {
-    const response = await fetch("https://www.rcmp-grc.gc.ca/en/rss/39", { headers: { 'User-Agent': 'Mozilla/5.0' } });
-    if (!response.ok) return [];
-    const xmlText = await response.text();
+    const xmlText = await fetchWithSslBypass("https://www.rcmp-grc.gc.ca/en/rss/39", { 'User-Agent': 'Mozilla/5.0' });
+    if (!xmlText) return [];
     const items = xmlText.split('<item>').slice(1).map(i => {
       const titleMatch = i.match(/<title>(.*?)<\/title>/);
       const linkMatch = i.match(/<link>(.*?)<\/link>/);

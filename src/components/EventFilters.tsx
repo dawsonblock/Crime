@@ -1,5 +1,5 @@
 import React from "react";
-import { Filter, Calendar, AlertTriangle, ListFilter, Bookmark, Search, RefreshCw, Layers, Settings, FileSpreadsheet, FileText, Download, MapPin, Compass, Bell, BellOff, Radio } from "lucide-react";
+import { Filter, Calendar, AlertTriangle, ListFilter, Bookmark, Search, RefreshCw, Layers, Settings, FileSpreadsheet, FileText, Download, MapPin, Compass, Bell, BellOff, Radio, ShieldCheck, ChevronDown, ChevronUp } from "lucide-react";
 import { SeverityType, SourceType, EventItem } from "../types";
 import { jsPDF } from "jspdf";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
@@ -32,6 +32,7 @@ export interface FilterState {
   criticalOnly: boolean;
   sourceTiers: number[];
   autoGroupEvents: boolean;
+  showIncidentDensity: boolean;
 }
 
 interface EventFiltersProps {
@@ -81,6 +82,25 @@ export default function EventFilters({
   allEvents = [],
   bookmarks = [],
 }: EventFiltersProps) {
+  const [isSeverityDropdownOpen, setIsSeverityDropdownOpen] = React.useState<boolean>(false);
+  const severityDropdownRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (severityDropdownRef.current && !severityDropdownRef.current.contains(event.target as Node)) {
+        setIsSeverityDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+
+  const isTrustedOnly = React.useMemo(() => {
+    return filters.sourceTiers && filters.sourceTiers.length === 2 && filters.sourceTiers.includes(1) && filters.sourceTiers.includes(2);
+  }, [filters.sourceTiers]);
+
   // Compute category distribution based on allEvents
   const categoryCounts = React.useMemo(() => {
     const counts: Record<string, number> = {};
@@ -680,28 +700,88 @@ export default function EventFilters({
           </span>
         </button>
 
-        {/* Auto-Group Incidents Toggle */}
+        {/* Trusted Sources Quick-Access Toggle */}
         <button
-          id="auto-group-toggle"
+          id="trusted-sources-only-toggle"
           type="button"
-          onClick={() => onChange({ ...filters, autoGroupEvents: !filters.autoGroupEvents })}
+          onClick={() => {
+            const nextTiers = isTrustedOnly ? [1, 2, 3, 4] : [1, 2];
+            onChange({ ...filters, sourceTiers: nextTiers });
+          }}
           className={`w-full flex items-center justify-between p-2.5 rounded border text-xs font-semibold cursor-pointer transition-all duration-150 ${
+            isTrustedOnly
+              ? "bg-emerald-50 border-emerald-300 text-emerald-800 shadow-sm ring-1 ring-emerald-500/10"
+              : "bg-slate-50 border-slate-200 hover:bg-slate-100/70 text-slate-700"
+          }`}
+          title="Toggle display to show only Tier 1 (Official) and Tier 2 (Media) verified incident sources"
+        >
+          <div className="flex items-center gap-2">
+            <ShieldCheck size={13} className={isTrustedOnly ? "text-emerald-650" : "text-slate-400"} />
+            <span>Trusted Sources Only (Tiers 1 & 2)</span>
+          </div>
+          <span className={`font-mono text-[9px] uppercase font-extrabold px-1.5 py-0.5 rounded border leading-none transition-colors ${
+            isTrustedOnly
+              ? "bg-emerald-600 border-emerald-755 text-white"
+              : "bg-white border-slate-205 text-slate-500"
+          }`}>
+            {isTrustedOnly ? "VERIFIED" : "OFF"}
+          </span>
+        </button>
+
+        {/* Auto-Group Incidents Checkbox Option */}
+        <label
+          id="auto-group-toggle-container"
+          className={`w-full flex items-center gap-3 p-2.5 rounded border text-xs font-semibold cursor-pointer select-none transition-all duration-150 ${
             filters.autoGroupEvents
               ? "bg-indigo-50 border-indigo-300 text-indigo-800 shadow-sm ring-1 ring-indigo-500/10"
               : "bg-slate-50 border-slate-200 hover:bg-slate-100/70 text-slate-700"
           }`}
-          title="Cluster/Group incidents that occur on the same block or intersection"
+          title="Group nearby incidents into single cluster summary cards in the list instead of individual items"
+        >
+          <input
+            id="auto-group-checkbox"
+            type="checkbox"
+            checked={filters.autoGroupEvents}
+            onChange={() => onChange({ ...filters, autoGroupEvents: !filters.autoGroupEvents })}
+            className="h-4 w-4 rounded text-indigo-600 border-slate-300 focus:ring-1 focus:ring-offset-0 accent-indigo-600 cursor-pointer"
+          />
+          <div className="flex-1 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Layers size={13} className={filters.autoGroupEvents ? "text-indigo-650" : "text-slate-400"} />
+              <span>Auto-Group by Proximity (List Clusters)</span>
+            </div>
+            <span className={`font-mono text-[9px] uppercase font-extrabold px-1.5 py-0.5 rounded border leading-none transition-colors ${
+              filters.autoGroupEvents
+                ? "bg-indigo-600 border-indigo-755 text-white"
+                : "bg-white border-slate-205 text-slate-500"
+            }`}>
+              {filters.autoGroupEvents ? "Clusters" : "Raw List"}
+            </span>
+          </div>
+        </label>
+
+        {/* Toggle Global Incident Density Layer */}
+        <button
+          id="global-incident-density-toggle"
+          type="button"
+          onClick={() => onChange({ ...filters, showIncidentDensity: !filters.showIncidentDensity })}
+          className={`w-full flex items-center justify-between p-2.5 rounded border text-xs font-semibold cursor-pointer transition-all duration-150 ${
+            filters.showIncidentDensity
+              ? "bg-purple-50 border-purple-300 text-purple-800 shadow-sm ring-1 ring-purple-500/10"
+              : "bg-slate-50 border-slate-200 hover:bg-slate-100/70 text-slate-700"
+          }`}
+          title="Toggle global incident density visualization on the map to identify areas with high concentrations of activity"
         >
           <div className="flex items-center gap-2">
-            <Layers size={13} className={filters.autoGroupEvents ? "text-indigo-650" : "text-slate-400"} />
-            <span>Auto-Group Block Incidents</span>
+            <Radio size={13} className={filters.showIncidentDensity ? "text-purple-650 animate-pulse" : "text-slate-400"} />
+            <span>Global Incident Density View</span>
           </div>
           <span className={`font-mono text-[9px] uppercase font-extrabold px-1.5 py-0.5 rounded border leading-none transition-colors ${
-            filters.autoGroupEvents
-              ? "bg-indigo-600 border-indigo-755 text-white"
+            filters.showIncidentDensity
+              ? "bg-purple-600 border-purple-755 text-white"
               : "bg-white border-slate-205 text-slate-500"
           }`}>
-            {filters.autoGroupEvents ? "ACTIVE" : "OFF"}
+            {filters.showIncidentDensity ? "ACTIVE" : "OFF"}
           </span>
         </button>
 
@@ -934,11 +1014,11 @@ export default function EventFilters({
           </div>
         </div>
 
-        {/* Severity Classification - Multi-select Checkbox Group */}
-        <div className="space-y-2">
+        {/* Severity Classification - Multi-select Dropdown */}
+        <div className="space-y-2 relative" ref={severityDropdownRef}>
           <div className="flex items-center justify-between">
             <label className="text-[10px] uppercase font-bold tracking-widest font-mono text-slate-400 flex items-center gap-1.5">
-              <AlertTriangle size={11} /> Threat Severity Level
+              <AlertTriangle size={11} className="text-amber-500" /> Threat Severity Level
             </label>
             <div className="flex gap-2">
               <button
@@ -959,61 +1039,107 @@ export default function EventFilters({
               </button>
             </div>
           </div>
-          <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 space-y-2">
-            {(["critical", "high", "medium", "low"] as SeverityType[]).map((sev) => {
-              const isChecked = filters.severities.includes(sev);
-              
-              let textClasses = "";
-              let checkboxBorderClass = "";
-              let checkboxBgClass = "";
-              let glowColor = "";
 
-              if (sev === "critical") {
-                textClasses = "text-red-750 font-bold";
-                checkboxBorderClass = "border-red-400 checked:bg-red-600 focus:ring-red-300";
-                checkboxBgClass = isChecked ? "bg-red-50 text-red-900 border-red-200" : "bg-white border-slate-200 hover:bg-red-50/30";
-                glowColor = "accent-red-600";
-              } else if (sev === "high") {
-                textClasses = "text-orange-755 font-bold";
-                checkboxBorderClass = "border-orange-400 checked:bg-orange-500 focus:ring-orange-300";
-                checkboxBgClass = isChecked ? "bg-orange-50 text-orange-900 border-orange-200" : "bg-white border-slate-200 hover:bg-orange-50/30";
-                glowColor = "accent-orange-500";
-              } else if (sev === "medium") {
-                textClasses = "text-yellow-850 font-bold";
-                checkboxBorderClass = "border-yellow-500 checked:bg-yellow-500 focus:ring-yellow-400";
-                checkboxBgClass = isChecked ? "bg-yellow-50 text-yellow-900 border-yellow-200" : "bg-white border-slate-200 hover:bg-yellow-50/30";
-                glowColor = "accent-yellow-500";
-              } else {
-                textClasses = "text-slate-705 font-bold";
-                checkboxBorderClass = "border-slate-400 checked:bg-slate-500 focus:ring-slate-300";
-                checkboxBgClass = isChecked ? "bg-slate-100 text-slate-800 border-slate-300" : "bg-white border-slate-200 hover:bg-slate-50";
-                glowColor = "accent-slate-500";
-              }
-
-              return (
-                <label
-                  key={sev}
-                  className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded border text-xs cursor-pointer select-none transition-all duration-150 ${checkboxBgClass}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={isChecked}
-                    onChange={() => handleSeverityToggle(sev)}
-                    className={`h-3.5 w-3.5 rounded text-indigo-600 border focus:ring-1 focus:ring-offset-0 ${glowColor} ${checkboxBorderClass} cursor-pointer`}
-                  />
-                  <div className="flex-1 flex items-center justify-between">
-                    <span className={`capitalize font-semibold ${textClasses}`}>{sev}</span>
-                    <span className="text-[10px] font-mono text-slate-400 font-semibold bg-white px-1.5 py-0.2 rounded border border-slate-100 uppercase">
-                      {sev === "critical" && "💡 Critical"}
-                      {sev === "high" && "⚠️ High"}
-                      {sev === "medium" && "🔔 Medium"}
-                      {sev === "low" && "ℹ️ Low"}
+          {/* Selector Button with capsule badges */}
+          <button
+            type="button"
+            onClick={() => setIsSeverityDropdownOpen(!isSeverityDropdownOpen)}
+            className="w-full flex items-center justify-between gap-2 px-3 py-2 bg-slate-50 border border-slate-200 hover:bg-slate-100 hover:border-slate-300 rounded-lg text-xs cursor-pointer select-none transition-all duration-150 shadow-sm"
+          >
+            <div className="flex flex-wrap items-center gap-1.5 overflow-hidden max-w-[85%]">
+              {filters.severities.length === 0 ? (
+                <span className="text-slate-400 italic">Select threat severities...</span>
+              ) : filters.severities.length === 4 ? (
+                <span className="font-semibold text-slate-700 bg-slate-200/70 border border-slate-300 px-2 py-0.5 rounded text-[10.5px]">
+                  All Severities Selected
+                </span>
+              ) : (
+                (["critical", "high", "medium", "low"] as SeverityType[]).map((sev) => {
+                  if (!filters.severities.includes(sev)) return null;
+                  let bgBadge = "";
+                  let textBadge = "";
+                  if (sev === "critical") {
+                    bgBadge = "bg-red-50 border-red-200 text-red-700";
+                    textBadge = "💡 Critical";
+                  } else if (sev === "high") {
+                    bgBadge = "bg-orange-50 border-orange-200 text-orange-750";
+                    textBadge = "⚠️ High";
+                  } else if (sev === "medium") {
+                    bgBadge = "bg-yellow-50 border-yellow-250 text-yellow-850";
+                    textBadge = "🔔 Medium";
+                  } else {
+                    bgBadge = "bg-slate-100 border-slate-300 text-slate-700";
+                    textBadge = "ℹ️ Low";
+                  }
+                  return (
+                    <span key={sev} className={`font-semibold border text-[9.5px] px-1.5 py-0.5 rounded flex items-center gap-0.5 leading-none select-none ${bgBadge}`}>
+                      {textBadge}
                     </span>
-                  </div>
-                </label>
-              );
-            })}
-          </div>
+                  );
+                })
+              )}
+            </div>
+            {isSeverityDropdownOpen ? <ChevronUp size={14} className="text-slate-500 shrink-0" /> : <ChevronDown size={14} className="text-slate-500 shrink-0" />}
+          </button>
+
+          {/* Dropdown Options List Box */}
+          {isSeverityDropdownOpen && (
+            <div className="absolute top-[calc(100%+4px)] left-0 w-full bg-white border border-slate-205 rounded-lg shadow-xl p-2 z-[600] space-y-1 animate-fadeIn">
+              {(["critical", "high", "medium", "low"] as SeverityType[]).map((sev) => {
+                const isChecked = filters.severities.includes(sev);
+                
+                let textClasses = "";
+                let checkboxBorderClass = "";
+                let checkboxBgClass = "";
+                let glowColor = "";
+
+                if (sev === "critical") {
+                  textClasses = "text-red-750 font-bold";
+                  checkboxBorderClass = "border-red-450 checked:bg-red-650 focus:ring-red-300";
+                  checkboxBgClass = isChecked ? "bg-red-50/60 border-red-200" : "border-transparent hover:bg-slate-50";
+                  glowColor = "accent-red-600";
+                } else if (sev === "high") {
+                  textClasses = "text-orange-755 font-bold";
+                  checkboxBorderClass = "border-orange-450 checked:bg-orange-550 focus:ring-orange-300";
+                  checkboxBgClass = isChecked ? "bg-orange-50/60 border-orange-200" : "border-transparent hover:bg-slate-50";
+                  glowColor = "accent-orange-500";
+                } else if (sev === "medium") {
+                  textClasses = "text-yellow-850 font-bold";
+                  checkboxBorderClass = "border-yellow-500 checked:bg-yellow-500 focus:ring-yellow-400";
+                  checkboxBgClass = isChecked ? "bg-yellow-50/60 border-yellow-200" : "border-transparent hover:bg-slate-50";
+                  glowColor = "accent-yellow-500";
+                } else {
+                  textClasses = "text-slate-705 font-bold";
+                  checkboxBorderClass = "border-slate-400 checked:bg-slate-500 focus:ring-slate-300";
+                  checkboxBgClass = isChecked ? "bg-slate-100/60 border-slate-200" : "border-transparent hover:bg-slate-50";
+                  glowColor = "accent-slate-500";
+                }
+
+                return (
+                  <label
+                    key={sev}
+                    className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded border text-xs cursor-pointer select-none transition-all duration-150 ${checkboxBgClass}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => handleSeverityToggle(sev)}
+                      className={`h-3.5 w-3.5 rounded text-indigo-600 border focus:ring-1 focus:ring-offset-0 ${glowColor} ${checkboxBorderClass} cursor-pointer`}
+                    />
+                    <div className="flex-1 flex items-center justify-between">
+                      <span className={`capitalize font-semibold ${textClasses}`}>{sev}</span>
+                      <span className="text-[10px] font-mono text-slate-400 font-semibold bg-white px-1.5 py-0.2 rounded border border-slate-100 uppercase select-none">
+                        {sev === "critical" && "💡 Critical"}
+                        {sev === "high" && "⚠️ High"}
+                        {sev === "medium" && "🔔 Medium"}
+                        {sev === "low" && "ℹ️ Low"}
+                      </span>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Severity Distribution Donut Chart Section */}

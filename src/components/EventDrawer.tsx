@@ -1,4 +1,5 @@
 import React from "react";
+import { motion } from "motion/react";
 import { X, ExternalLink, Bookmark, Navigation, AlertTriangle, ShieldCheck, Calendar, MapPin, Sparkles, Camera, Eye, Radio, Compass, Shield, Activity, Clock, ChevronLeft, ChevronRight, Maximize2, Minus, Share2, Twitter, Facebook, Copy, Check, Send, Printer, FileSpreadsheet, TrendingUp, TrendingDown } from "lucide-react";
 import { ResponsiveContainer, AreaChart, Area, Tooltip as RechartsTooltip, XAxis } from "recharts";
 import { EventItem } from "../types";
@@ -21,6 +22,8 @@ interface EventDrawerProps {
   sizes?: any;
   toggleSizing?: (component: string, targetSize: "normal" | "enlarge" | "minimize") => void;
   allEvents?: EventItem[];
+  userLat?: number | null;
+  userLng?: number | null;
 }
 
 export default function EventDrawer({
@@ -33,8 +36,18 @@ export default function EventDrawer({
   sizes,
   toggleSizing,
   allEvents = [],
+  userLat = null,
+  userLng = null,
 }: EventDrawerProps) {
   if (!selectedEvent) return null;
+
+  const scrollContainerRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = 0;
+    }
+  }, [selectedEvent?.id]);
 
   // Local state for smooth notes typing
   const [localNote, setLocalNote] = React.useState("");
@@ -115,6 +128,53 @@ export default function EventDrawer({
 
     return days;
   }, [allEvents, selectedEvent?.eventType, selectedEvent?.publishedAt]);
+
+  const neighborhoodTrendData = React.useMemo(() => {
+    if (!selectedEvent) return [];
+    
+    // Helper: Distance in meters (copy)
+    const getDist = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+      const R = 6371000;
+      const dLat = ((lat2 - lat1) * Math.PI) / 180;
+      const dLon = ((lon2 - lon1) * Math.PI) / 180;
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    };
+
+    const severityMap: Record<string, number> = { low: 1, medium: 2, high: 3, critical: 4 };
+    const eventsList = allEvents || [];
+    const radius = 2000; // 2km
+    
+    const anchor = new Date(selectedEvent.publishedAt);
+    const anchorMidnight = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
+
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const day = new Date(anchorMidnight);
+      day.setDate(anchorMidnight.getDate() - i);
+      const dateKey = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+      days.push({ dateKey, label: day.toLocaleDateString("en-US", { month: "short", day: "numeric" }), avgSeverity: 0, count: 0 });
+    }
+
+    eventsList.forEach(evt => {
+      const dist = getDist(selectedEvent.latitude, selectedEvent.longitude, evt.latitude, evt.longitude);
+      if (dist <= radius) {
+        const evtDate = new Date(evt.publishedAt);
+        const evtKey = `${evtDate.getFullYear()}-${String(evtDate.getMonth() + 1).padStart(2, "0")}-${String(evtDate.getDate()).padStart(2, "0")}`;
+        const matched = days.find(d => d.dateKey === evtKey);
+        if (matched) {
+          matched.count++;
+          matched.avgSeverity += severityMap[evt.severity] || 0;
+        }
+      }
+    });
+
+    days.forEach(d => {
+      if (d.count > 0) d.avgSeverity = Math.round(d.avgSeverity / d.count);
+    });
+
+    return days;
+  }, [allEvents, selectedEvent?.latitude, selectedEvent?.longitude, selectedEvent?.publishedAt]);
 
   const totalInCategoryLastWeek = React.useMemo(() => {
     return trendData.reduce((sum, d) => sum + d.count, 0);
@@ -591,13 +651,21 @@ export default function EventDrawer({
 
       {/* Main Drawer Body scroll space */}
       <div 
+        ref={scrollContainerRef}
         style={{ 
           fontSize: `${13 * textScale}px`,
           padding: `${20 * paddingScale}px`
         }}
-        className="flex-1 overflow-y-auto space-y-6 scrollbar-thin scrollbar-thumb-slate-200 transition-all duration-150"
+        className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-200 transition-all duration-150"
       >
-        {/* RIGHT SIDE DRAWER ADAPTIVE SLIDERS DECK */}
+        <motion.div
+          key={selectedEvent.id}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25, ease: "easeOut" }}
+          className="space-y-6"
+        >
+          {/* RIGHT SIDE DRAWER ADAPTIVE SLIDERS DECK */}
         <div className="bg-slate-50 hover:bg-slate-100/70 border border-slate-200/80 rounded-xl p-3.5 space-y-3 shadow-sm select-none transition-colors">
           <div className="flex items-center justify-between pb-2 border-b border-slate-200 text-slate-700 font-mono text-[10.5px]">
             <div className="flex items-center gap-1.5">
@@ -1007,6 +1075,46 @@ export default function EventDrawer({
           </p>
         </div>
 
+        <div id="neighborhood-severity-sparkline-card" className="bg-slate-50/50 border border-slate-150 rounded-xl p-4 space-y-3 shadow-2xs">
+          <div className="text-[10px] uppercase font-bold tracking-wider font-mono text-slate-400 flex items-center justify-between">
+            <span className="flex items-center gap-1.5">
+              <TrendingUp size={11} className="text-emerald-600" />
+              <span>7-Day Neighborhood Severity Trend</span>
+            </span>
+          </div>
+
+          <div className="h-20 w-full -mx-1" id="sparkline-neighborhood-chart">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={neighborhoodTrendData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
+                <defs>
+                  <linearGradient id="neighborhoodGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.25}/>
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <Area type="monotone" dataKey="avgSeverity" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#neighborhoodGradient)" activeDot={{ r: 4, stroke: '#10b981', strokeWidth: 1 }} />
+                <RechartsTooltip
+                  content={({ active, payload }) => {
+                    if (active && payload && payload.length) {
+                      const data = payload[0].payload;
+                      return (
+                        <div className="bg-slate-900 border border-slate-750 text-white p-1.5 rounded shadow-lg text-[9px] font-mono flex flex-col pointer-events-none leading-normal">
+                          <span className="font-bold">{data.label}</span>
+                          <span>Severity: {data.avgSeverity}</span>
+                        </div>
+                      );
+                    }
+                    return null;
+                  }}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+          <p className="text-[9px] text-slate-400 font-medium leading-normal block">
+            Average severity (1-4) of incidents within a 2km radius over the past week.
+          </p>
+        </div>
+
         {/* Dynamic incident content summaries */}
         <div className="space-y-2">
           <div className="text-[10px] uppercase font-bold tracking-wider font-mono text-slate-400 flex items-center gap-1.5">
@@ -1322,6 +1430,7 @@ export default function EventDrawer({
             </p>
           </div>
         </div>
+        </motion.div>
       </div>
 
       {/* Target native source CTA */}
@@ -1452,6 +1561,30 @@ export default function EventDrawer({
           <Printer size={12} className="text-slate-600" />
           <span>Print Physical Dossier Report</span>
         </button>
+
+        <a
+          href={(() => {
+            const destLat = selectedEvent.displayLatitude ?? selectedEvent.latitude;
+            const destLng = selectedEvent.displayLongitude ?? selectedEvent.longitude;
+            let url = `https://www.google.com/maps/dir/?api=1&destination=${destLat},${destLng}`;
+            if (userLat !== undefined && userLat !== null && userLng !== undefined && userLng !== null) {
+              url += `&origin=${userLat},${userLng}`;
+            }
+            return url;
+          })()}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="w-full cursor-pointer bg-emerald-600 hover:bg-emerald-500 border border-emerald-700 text-white font-bold text-xs py-2.5 px-4 rounded flex items-center justify-center gap-1.5 transition-colors shadow-sm animate-fadeIn"
+          title="Open Google Maps directions for this incident pre-filled with coordinates"
+        >
+          <Navigation size={12} className="rotate-45 fill-white/10" />
+          <span>Get Directions</span>
+          {userLat !== null && userLat !== undefined && userLng !== null && userLng !== undefined && (
+            <span className="text-[10px] text-emerald-100 font-mono font-medium pl-1 bg-emerald-700/40 px-1 rounded">
+              GPS Active
+            </span>
+          )}
+        </a>
 
         <a
           href={selectedEvent.originalUrl}

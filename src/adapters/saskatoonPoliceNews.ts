@@ -1,6 +1,6 @@
 import { EventItem } from "../types";
 import { ruleBasedClassifier } from "../utils/classifier";
-import { geocodeLocation } from "../utils/geo";
+import { geocodeBatchLocation } from "../utils/geo";
 import crypto from "crypto";
 
 export async function fetchSaskatoonPoliceNews(): Promise<EventItem[]> {
@@ -22,10 +22,14 @@ export async function fetchSaskatoonPoliceNews(): Promise<EventItem[]> {
       };
     });
 
-    for (const item of items) {
+    const locationsToResolve = items.map(item => item.title + " " + item.description);
+    const resolvedLocations = await geocodeBatchLocation(locationsToResolve, "sps_news");
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
       if (!item.title) continue;
       const uniqueId = "sps-" + crypto.createHash("md5").update(item.link).digest("hex").substring(0, 16);
-      const geocoded = await geocodeLocation(item.title + " " + item.description, "sps_news");
+      const geocoded = resolvedLocations[i];
       const classified = ruleBasedClassifier(item.title, item.description);
       
       newsEvents.push({

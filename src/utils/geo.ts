@@ -93,7 +93,7 @@ export function extractLocationText(text: string): string {
   return "Saskatoon, SK";
 }
 
-export async function geocodeLocation(addressText: string, sourceKey: string): Promise<{
+export type ResolvedLocation = {
   latitude: number;
   longitude: number;
   displayLatitude: number;
@@ -101,7 +101,9 @@ export async function geocodeLocation(addressText: string, sourceKey: string): P
   locationPrecision: LocationPrecisionType;
   locationConfidence: number;
   locationText: string;
-}> {
+};
+
+export async function geocodeLocation(addressText: string, sourceKey: string): Promise<ResolvedLocation> {
   let determinedPrecision: LocationPrecisionType = "unknown";
   const lowerAddress = addressText.toLowerCase();
 
@@ -246,4 +248,8 @@ export async function geocodeLocation(addressText: string, sourceKey: string): P
     locationConfidence: conf,
     locationText: finalLocationText
   };
+}
+
+export async function geocodeBatchLocation(addresses: string[], sourceKey: string): Promise<ResolvedLocation[]> {
+  return Promise.all(addresses.map(addr => geocodeLocation(addr, sourceKey)));
 }
