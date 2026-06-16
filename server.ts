@@ -99,7 +99,6 @@ function fetchWithSslBypass(urlStr: string, headers: Record<string, string> = {}
           "User-Agent": "Mozilla/5.0",
           ...headers,
         },
-        rejectUnauthorized: false, // Bypass SSL verification
       };
 
       const req = https.request(options, (res) => {
@@ -763,12 +762,17 @@ function isIncidentCompliant(e: any): boolean {
 // Seed Firestore initially with our verified, compliant seeds if empty
 async function seedFirestoreIfNeeded() {
   if (!db) {
-    events = initialSeeds.filter(isIncidentCompliant).map(e => ({
-      ...e,
-      isVerified: configSources.some(s => s.key === e.sourceKey),
-      imageUrls: e.imageUrls || getEventImagesByType(e.eventType),
-      createdAt: e.createdAt || new Date().toISOString()
-    }));
+    if (process.env.DEMO_MODE === "true") {
+      events = initialSeeds.filter(isIncidentCompliant).map(e => ({
+        ...e,
+        isVerified: configSources.some(s => s.key === e.sourceKey),
+        imageUrls: e.imageUrls || getEventImagesByType(e.eventType),
+        createdAt: e.createdAt || new Date().toISOString()
+      }));
+    } else {
+      console.warn("[Firebase Seed] Firebase not active and DEMO_MODE is not true. Loading empty incident dataset.");
+      events = [];
+    }
     return;
   }
   try {
@@ -798,13 +802,18 @@ async function seedFirestoreIfNeeded() {
 // Synchronizes database with the local memory cache, strictly validating each item
 async function syncEventsFromFirestore() {
   if (!db) {
-    console.log("[Firebase Sync] Firebase not active. Proceeding with in-memory verified seeds.");
-    events = initialSeeds.filter(isIncidentCompliant).map(e => ({
-      ...e,
-      isVerified: configSources.some(s => s.key === e.sourceKey),
-      imageUrls: e.imageUrls || getEventImagesByType(e.eventType),
-      createdAt: e.createdAt || new Date().toISOString()
-    }));
+    if (process.env.DEMO_MODE === "true") {
+      console.log("[Firebase Sync] Firebase not active. Proceeding with in-memory verified seeds.");
+      events = initialSeeds.filter(isIncidentCompliant).map(e => ({
+        ...e,
+        isVerified: configSources.some(s => s.key === e.sourceKey),
+        imageUrls: e.imageUrls || getEventImagesByType(e.eventType),
+        createdAt: e.createdAt || new Date().toISOString()
+      }));
+    } else {
+      console.warn("[Firebase Sync] Firebase not active and DEMO_MODE is not true. Loading empty incident dataset.");
+      events = [];
+    }
     return;
   }
   try {
@@ -823,12 +832,16 @@ async function syncEventsFromFirestore() {
     console.log(`[Firebase Sync] Ready. Loaded ${events.length} fully verified incidents from Firestore.`);
   } catch (err) {
     console.error("[Firebase Sync Error] syncEventsFromFirestore failed. Loading in-memory fallback:", err);
-    events = initialSeeds.filter(isIncidentCompliant).map(e => ({
-      ...e,
-      isVerified: configSources.some(s => s.key === e.sourceKey),
-      imageUrls: e.imageUrls || getEventImagesByType(e.eventType),
-      createdAt: e.createdAt || new Date().toISOString()
-    }));
+    if (process.env.DEMO_MODE === "true") {
+      events = initialSeeds.filter(isIncidentCompliant).map(e => ({
+        ...e,
+        isVerified: configSources.some(s => s.key === e.sourceKey),
+        imageUrls: e.imageUrls || getEventImagesByType(e.eventType),
+        createdAt: e.createdAt || new Date().toISOString()
+      }));
+    } else {
+      events = [];
+    }
   }
 }
 

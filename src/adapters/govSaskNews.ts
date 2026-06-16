@@ -4,6 +4,8 @@ import { geocodeLocation } from "../utils/geo";
 import crypto from "crypto";
 
 export async function fetchGovSaskNews(): Promise<EventItem[]> {
+  if (process.env.DEMO_MODE !== "true") return [];
+  
   // Simulated data as per original python adapter
   const simulatedData = [
     {

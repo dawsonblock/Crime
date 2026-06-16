@@ -17,6 +17,7 @@ interface HotspotProjectionPanelProps {
   onAlignMap: (coords: [number, number]) => void;
   heatmapRadiusMultiplier: number;
   setHeatmapRadiusMultiplier: (val: number) => void;
+  restrictHeatmapToZones?: boolean;
 }
 
 interface NeighborhoodKde {

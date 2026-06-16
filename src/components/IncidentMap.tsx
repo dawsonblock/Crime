@@ -250,20 +250,6 @@ export default function IncidentMap({
   const mapCaptureRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
 
-  const heatmapEvents = useMemo(() => {
-    if (!restrictHeatmapToZones) return displayEvents;
-    
-    // Check if event is within any active alert zone
-    const activeZones = customPins.filter(pin => pin.isAlertZone);
-    if (activeZones.length === 0) return []; 
-    
-    return displayEvents.filter(event => {
-        return activeZones.some(zone => {
-            const dist = getDistanceMeters(zone.latitude, zone.longitude, event.latitude, event.longitude);                
-            return dist <= (zone.alertRadiusMeters || 1000);
-        });
-    });
-  }, [displayEvents, restrictHeatmapToZones, customPins]);
   const onMapUpdateRef = useRef(onMapUpdate);
 
   // ----------------------------------------------------
@@ -334,6 +320,21 @@ export default function IncidentMap({
       return !isNaN(t) && t <= timeLapseCurrentTime;
     });
   }, [events, timeLapseActive, timeLapseCurrentTime]);
+
+  const heatmapEvents = useMemo(() => {
+    if (!restrictHeatmapToZones) return displayEvents;
+    
+    // Check if event is within any active alert zone
+    const activeZones = customPins.filter(pin => pin.isAlertZone);
+    if (activeZones.length === 0) return []; 
+    
+    return displayEvents.filter(event => {
+        return activeZones.some(zone => {
+            const dist = getDistanceMeters(zone.latitude, zone.longitude, event.latitude, event.longitude);                
+            return dist <= (zone.alertRadiusMeters || 1000);
+        });
+    });
+  }, [displayEvents, restrictHeatmapToZones, customPins]);
 
   useEffect(() => {
     onMapUpdateRef.current = onMapUpdate;

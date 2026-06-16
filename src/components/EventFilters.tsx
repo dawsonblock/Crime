@@ -84,6 +84,27 @@ export default function EventFilters({
 }: EventFiltersProps) {
   const [isSeverityDropdownOpen, setIsSeverityDropdownOpen] = React.useState<boolean>(false);
   const severityDropdownRef = React.useRef<HTMLDivElement>(null);
+  const [searchHistory, setSearchHistory] = React.useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('event-search-history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      const query = filters.searchQuery.trim();
+      if (query.length > 0) {
+        setSearchHistory(prev => {
+          const newHistory = [query, ...prev.filter(h => h !== query)].slice(0, 3);
+          localStorage.setItem('event-search-history', JSON.stringify(newHistory));
+          return newHistory;
+        });
+      }
+    }
+  };
 
   React.useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -652,11 +673,25 @@ export default function EventFilters({
               type="text"
               value={filters.searchQuery}
               onChange={(e) => onChange({ ...filters, searchQuery: e.target.value })}
+              onKeyDown={handleKeyDown}
               placeholder="Search suspect, street, category..."
               className="w-full bg-slate-50 border border-slate-200 rounded py-1.5 pl-8 pr-3 text-xs placeholder-slate-400 text-slate-800 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
             />
             <Search size={12} className="absolute left-2.5 top-2.5 text-slate-400" />
           </div>
+          {searchHistory.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 pt-2">
+              {searchHistory.map((q) => (
+                <button
+                  key={q}
+                  onClick={() => onChange({ ...filters, searchQuery: q })}
+                  className="px-2 py-0.5 text-[9px] bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-full transition-colors font-mono"
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Saved Pin Toggle */}
@@ -728,37 +763,30 @@ export default function EventFilters({
           </span>
         </button>
 
-        {/* Auto-Group Incidents Checkbox Option */}
-        <label
-          id="auto-group-toggle-container"
-          className={`w-full flex items-center gap-3 p-2.5 rounded border text-xs font-semibold cursor-pointer select-none transition-all duration-150 ${
+        {/* Auto-Group Incidents Toggle */}
+        <button
+          id="auto-group-incidents-toggle"
+          type="button"
+          onClick={() => onChange({ ...filters, autoGroupEvents: !filters.autoGroupEvents })}
+          className={`w-full flex items-center justify-between p-2.5 rounded border text-xs font-semibold cursor-pointer transition-all duration-150 ${
             filters.autoGroupEvents
               ? "bg-indigo-50 border-indigo-300 text-indigo-800 shadow-sm ring-1 ring-indigo-500/10"
               : "bg-slate-50 border-slate-200 hover:bg-slate-100/70 text-slate-700"
           }`}
           title="Group nearby incidents into single cluster summary cards in the list instead of individual items"
         >
-          <input
-            id="auto-group-checkbox"
-            type="checkbox"
-            checked={filters.autoGroupEvents}
-            onChange={() => onChange({ ...filters, autoGroupEvents: !filters.autoGroupEvents })}
-            className="h-4 w-4 rounded text-indigo-600 border-slate-300 focus:ring-1 focus:ring-offset-0 accent-indigo-600 cursor-pointer"
-          />
-          <div className="flex-1 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Layers size={13} className={filters.autoGroupEvents ? "text-indigo-650" : "text-slate-400"} />
-              <span>Auto-Group by Proximity (List Clusters)</span>
-            </div>
-            <span className={`font-mono text-[9px] uppercase font-extrabold px-1.5 py-0.5 rounded border leading-none transition-colors ${
-              filters.autoGroupEvents
-                ? "bg-indigo-600 border-indigo-755 text-white"
-                : "bg-white border-slate-205 text-slate-500"
-            }`}>
-              {filters.autoGroupEvents ? "Clusters" : "Raw List"}
-            </span>
+          <div className="flex items-center gap-2">
+            <Layers size={13} className={filters.autoGroupEvents ? "text-indigo-650" : "text-slate-400"} />
+            <span>Auto-Group Incidents</span>
           </div>
-        </label>
+          <span className={`font-mono text-[9px] uppercase font-extrabold px-1.5 py-0.5 rounded border leading-none transition-colors ${
+            filters.autoGroupEvents
+              ? "bg-indigo-600 border-indigo-755 text-white"
+              : "bg-white border-slate-205 text-slate-500"
+          }`}>
+            {filters.autoGroupEvents ? "CLUSTERS" : "OFF"}
+          </span>
+        </button>
 
         {/* Toggle Global Incident Density Layer */}
         <button
