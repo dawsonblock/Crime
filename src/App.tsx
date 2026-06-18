@@ -23,9 +23,6 @@ import PrintableIncidentReport from "./components/PrintableIncidentReport";
 import CompareIncidentsPanel from "./components/CompareIncidentsPanel";
 import HotspotProjectionPanel from "./components/HotspotProjectionPanel";
 import AlertZonesPanel from "./components/AlertZonesPanel";
-import jsPDF from 'jspdf';
-import 'jspdf-autotable';
-
 
 export default function App() {
   // Application Data States
@@ -83,6 +80,19 @@ export default function App() {
   const [showHeatmap, setShowHeatmap] = useState<boolean>(false);
   const [showPins, setShowPins] = useState<boolean>(true);
   const [useWebGLHeatmap, setUseWebGLHeatmap] = useState<boolean>(true);
+  const [clusterPins, setClusterPins] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem("saskatoon_cluster_pins");
+      return saved !== "false";
+    } catch {
+      return true;
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem("saskatoon_cluster_pins", String(clusterPins));
+  }, [clusterPins]);
+
   const [heatmapOpacity, setHeatmapOpacity] = useState<number>(0.18);
   const [heatmapRadiusMultiplier, setHeatmapRadiusMultiplier] = useState<number>(1.0);
   const [restrictHeatmapToZones, setRestrictHeatmapToZones] = useState<boolean>(false);
@@ -198,34 +208,6 @@ export default function App() {
   const [showHelpGuide, setShowHelpGuide] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState<string | null>(null);
-
-  const exportFilteredListToPDF = () => {
-    const doc = new jsPDF() as any;
-    
-    // Add title/timestamp
-    doc.setFontSize(18);
-    doc.text('Filtered Incident Report', 14, 22);
-    doc.setFontSize(10);
-    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 30);
-    doc.text(`Total incidents: ${filteredEvents.length}`, 14, 35);
-    
-    // Prepare table data
-    const tableColumn = ["Title", "Location", "Severity", "Published"];
-    const tableRows = filteredEvents.map(evt => [
-        evt.title,
-        evt.locationText || "N/A",
-        evt.severity,
-        new Date(evt.publishedAt).toLocaleDateString()
-    ]);
-    
-    doc.autoTable({
-        head: [tableColumn],
-        body: tableRows,
-        startY: 40
-    });
-    
-    doc.save(`IncidentReport_${new Date().toISOString().slice(0, 10)}.pdf`);
-};
 
   // Map Base Style Selection ("dark" | "streets" | "satellite"), backed by localStorage
   const [mapStyle, setMapStyle] = useState<"dark" | "streets" | "satellite">(() => {
@@ -2088,13 +2070,6 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="flex-1 overflow-y-auto p-3 space-y-2 scrollbar-thin scrollbar-thumb-slate-200">
-                    <button
-                      onClick={exportFilteredListToPDF}
-                      className="w-full flex items-center justify-center gap-2 p-2 bg-slate-100 hover:bg-slate-200 text-xs font-semibold rounded text-slate-700 transition"
-                    >
-                      <Download size={14} />
-                      Export Filtered List (PDF)
-                    </button>
                     {compareEventIds.length > 0 && (
                       <div id="compare-selection-banner" className="bg-blue-50/90 border border-blue-200 rounded-lg p-2.5 shadow-sm space-y-2 flex flex-col text-slate-800 animate-fadeIn mb-1">
                         <div className="flex items-center justify-between">
@@ -2649,6 +2624,8 @@ export default function App() {
               setMapStyle={setMapStyle}
               showPins={showPins}
               setShowPins={setShowPins}
+              clusterPins={clusterPins}
+              setClusterPins={setClusterPins}
               showIncidentDensity={filters.showIncidentDensity}
               useWebGLHeatmap={useWebGLHeatmap}
               setUseWebGLHeatmap={setUseWebGLHeatmap}
@@ -2760,6 +2737,8 @@ export default function App() {
               setShowPins={setShowPins}
               useWebGLHeatmap={useWebGLHeatmap}
               setUseWebGLHeatmap={setUseWebGLHeatmap}
+              clusterPins={clusterPins}
+              setClusterPins={setClusterPins}
             />
           </div>
         </div>

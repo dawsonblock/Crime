@@ -58,6 +58,8 @@ interface IncidentMapProps {
   setSelectedRouteId?: (val: string | null) => void;
   showIncidentDensity?: boolean;
   restrictHeatmapToZones?: boolean;
+  clusterPins?: boolean;
+  setClusterPins?: (val: boolean) => void;
 }
 
 // Haversine distance calculator in meters
@@ -245,6 +247,8 @@ export default function IncidentMap({
   setSelectedRouteId,
   showIncidentDensity,
   restrictHeatmapToZones,
+  clusterPins: clusterPinsProp,
+  setClusterPins: setClusterPinsProp,
 }: IncidentMapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapCaptureRef = useRef<HTMLDivElement>(null);
@@ -381,7 +385,7 @@ export default function IncidentMap({
     window.addEventListener("mouseup", handleMouseUp);
   };
 
-  const [clusterPins, setClusterPins] = useState<boolean>(() => {
+  const [clusterPinsLocal, setClusterPinsLocal] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem("saskatoon_cluster_pins");
       return saved !== "false";
@@ -389,6 +393,15 @@ export default function IncidentMap({
       return true;
     }
   });
+
+  const clusterPins = clusterPinsProp !== undefined ? clusterPinsProp : clusterPinsLocal;
+  const setClusterPins = (val: boolean) => {
+    if (setClusterPinsProp) {
+      setClusterPinsProp(val);
+    } else {
+      setClusterPinsLocal(val);
+    }
+  };
 
   useEffect(() => {
     if (showIncidentDensity !== undefined) {

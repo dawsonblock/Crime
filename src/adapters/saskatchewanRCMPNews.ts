@@ -17,6 +17,7 @@ function fetchWithSslBypass(urlStr: string, headers: Record<string, string> = {}
           "User-Agent": "Mozilla/5.0",
           ...headers,
         },
+        rejectUnauthorized: false, // Bypass SSL verification
       };
 
       const req = https.request(options, (res) => {

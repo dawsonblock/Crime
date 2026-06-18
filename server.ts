@@ -34,6 +34,8 @@ try {
   if (fs.existsSync(firebaseConfigPath)) {
     const config = JSON.parse(fs.readFileSync(firebaseConfigPath, "utf8"));
     const firebaseApp = getApps().length === 0 ? initializeApp(config) : getApp();
+    console.log("[Firebase] Config:", config);
+    console.log("[Firebase] App initialized:", firebaseApp.name);
     db = getFirestore(firebaseApp, config.firestoreDatabaseId);
     console.log("[Firebase] Successfully initialized with Database ID:", config.firestoreDatabaseId);
   } else {
@@ -99,6 +101,7 @@ function fetchWithSslBypass(urlStr: string, headers: Record<string, string> = {}
           "User-Agent": "Mozilla/5.0",
           ...headers,
         },
+        rejectUnauthorized: false, // Bypass SSL verification
       };
 
       const req = https.request(options, (res) => {
@@ -2069,16 +2072,39 @@ app.post("/api/ingest/run", async (req, res) => {
     const isApiKeyConfigured = !!process.env.GEMINI_API_KEY;
 
     // 1. Fetch live data from all real municipal and provincial news + map crawlers
-    const [newLiveData, newNewsData, reginaNewsData, rcmpData, extraMuniData, pythonEvents] = await Promise.all([
+    const [
+      newLiveData,
+      newNewsData,
+      reginaNewsData,
+      rcmpData,
+      extraMuniData,
+      pythonEvents,
+      modSpsNews,
+      modRcmpNews,
+      modGovSaskNews
+    ] = await Promise.all([
       fetchSaskatoonLiveCrimeData().catch(() => []),
       fetchSaskatoonNewsFeeds().catch(() => []),
       fetchReginaNewsFeeds().catch(() => []),
       fetchSaskatchewanRCMPFeeds().catch(() => []),
       fetchOtherMunicipalFeeds().catch(() => []),
       runPythonAdapterIngestion().catch(() => []),
+      fetchSaskatoonPoliceNews().catch(() => []),
+      fetchSaskatchewanRCMPNews().catch(() => []),
+      fetchGovSaskNews().catch(() => []),
     ]);
 
-    const combinedCrawl = [...newLiveData, ...newNewsData, ...reginaNewsData, ...rcmpData, ...extraMuniData, ...pythonEvents];
+    const combinedCrawl = [
+      ...newLiveData,
+      ...newNewsData,
+      ...reginaNewsData,
+      ...rcmpData,
+      ...extraMuniData,
+      ...pythonEvents,
+      ...modSpsNews,
+      ...modRcmpNews,
+      ...modGovSaskNews
+    ];
     for (const evt of combinedCrawl) {
       if (!events.some(e => e.id === evt.id || e.sourceHash === evt.sourceHash)) {
         if (isIncidentCompliant(evt)) {

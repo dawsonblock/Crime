@@ -15,6 +15,8 @@ interface MapLegendProps {
   setShowPins: (val: boolean) => void;
   useWebGLHeatmap: boolean;
   setUseWebGLHeatmap: (val: boolean) => void;
+  clusterPins?: boolean;
+  setClusterPins?: (val: boolean) => void;
 }
 
 export default function MapLegend({ 
@@ -29,7 +31,9 @@ export default function MapLegend({
   showPins,
   setShowPins,
   useWebGLHeatmap,
-  setUseWebGLHeatmap
+  setUseWebGLHeatmap,
+  clusterPins = true,
+  setClusterPins
 }: MapLegendProps) {
   const [isGuideExpanded, setIsGuideExpanded] = useState(false);
 
@@ -369,6 +373,27 @@ export default function MapLegend({
               <span>WebGL Heatmap</span>
             </button>
           </div>
+
+          {showPins && !showHeatmap && (
+            <label 
+              htmlFor="enable-incident-clusters-checkbox"
+              className="flex items-center gap-2 cursor-pointer bg-slate-100 hover:bg-white px-3 py-1 border border-slate-200 rounded-md transition-all select-none text-[10px] font-mono font-bold uppercase text-slate-600 hover:text-slate-850"
+              title="Enable or disable grouping multiple events into interactive clusters on the map"
+            >
+              <input
+                type="checkbox"
+                id="enable-incident-clusters-checkbox"
+                checked={clusterPins}
+                onChange={(e) => {
+                  if (setClusterPins) {
+                    setClusterPins(e.target.checked);
+                  }
+                }}
+                className="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded cursor-pointer accent-blue-600 focus:ring-blue-500"
+              />
+              <span>Enable Incident Clusters</span>
+            </label>
+          )}
 
           {showHeatmap && (
             <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded shadow-sm text-white text-[9.5px] font-mono select-none animate-fadeIn">
