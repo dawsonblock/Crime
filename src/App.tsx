@@ -2014,7 +2014,7 @@ export default function App() {
 
                 {sidebarTab === "trends" ? (
                   <div className="flex-1 overflow-hidden" id="tab-trends-container">
-                    <TrendsPanel events={events} />
+                    <TrendsPanel events={events} selectedCity={selectedCity} />
                   </div>
                 ) : sidebarTab === "chat" ? (
                   <div className="flex-1 overflow-hidden flex flex-col bg-slate-55" id="tab-chat-container">

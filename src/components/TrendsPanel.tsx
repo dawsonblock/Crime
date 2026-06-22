@@ -18,6 +18,7 @@ import { EventItem, SeverityType } from "../types";
 
 interface TrendsPanelProps {
   events: EventItem[];
+  selectedCity?: string;
 }
 
 interface DailyCount {
@@ -32,7 +33,7 @@ interface DailyCount {
   mediumLow: number;
 }
 
-export default function TrendsPanel({ events }: TrendsPanelProps) {
+export default function TrendsPanel({ events, selectedCity }: TrendsPanelProps) {
   const [metricType, setMetricType] = useState<"all" | "severity">("all");
   const [showForecast, setShowForecast] = useState<boolean>(false);
   const [forecastText, setForecastText] = useState<string>("");
@@ -126,6 +127,86 @@ export default function TrendsPanel({ events }: TrendsPanelProps) {
 
     return data;
   }, [events]);
+
+  // Calculate 30-day daily high and critical incident trend stats for the currently selected region
+  const regionalSeverityTrendData = useMemo(() => {
+    const data: Array<{
+      dateStr: string;
+      fullDate: string;
+      critical: number;
+      high: number;
+      combined: number;
+    }> = [];
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    const now = new Date();
+
+    // Filter events to the currently selected region first
+    const filteredByRegion = !selectedCity || selectedCity === "Saskatchewan (All)"
+      ? events
+      : events.filter((evt) => {
+          const cityLower = selectedCity.toLowerCase();
+          const eventLocLower = (evt.locationText || "").toLowerCase();
+          return (
+            eventLocLower.includes(cityLower) || 
+            (cityLower === "saskatoon" && evt.sourceKey.includes("saskatoon")) ||
+            (cityLower === "regina" && evt.sourceKey.includes("regina")) ||
+            (cityLower === "prince albert" && (evt.sourceKey.includes("prince_albert") || eventLocLower.includes("albert"))) ||
+            (cityLower === "moose jaw" && evt.sourceKey.includes("moose_jaw"))
+          );
+        });
+
+    for (let i = 29; i >= 0; i--) {
+      const targetDate = new Date(now.getTime() - i * oneDayMs);
+      const year = targetDate.getFullYear();
+      const monthStr = String(targetDate.getMonth() + 1).padStart(2, "0");
+      const dayStr = String(targetDate.getDate()).padStart(2, "0");
+      const dateKey = `${year}-${monthStr}-${dayStr}`;
+
+      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const displayDate = `${monthNames[targetDate.getMonth()]} ${targetDate.getDate()}`;
+      const fullDisplayDate = `${monthNames[targetDate.getMonth()]} ${targetDate.getDate()}, ${year}`;
+
+      const dayEvents = filteredByRegion.filter((evt) => {
+        try {
+          const pubDate = new Date(evt.publishedAt);
+          const pYear = pubDate.getFullYear();
+          const pMonthStr = String(pubDate.getMonth() + 1).padStart(2, "0");
+          const pDayStr = String(pubDate.getDate()).padStart(2, "0");
+          return `${pYear}-${pMonthStr}-${pDayStr}` === dateKey;
+        } catch {
+          return false;
+        }
+      });
+
+      const critical = dayEvents.filter((e) => e.severity === "critical").length;
+      const high = dayEvents.filter((e) => e.severity === "high").length;
+
+      data.push({
+        dateStr: displayDate,
+        fullDate: fullDisplayDate,
+        critical,
+        high,
+        combined: critical + high,
+      });
+    }
+
+    return data;
+  }, [events, selectedCity]);
+
+  // Aggregate stats derived from the regional 30-day severity series
+  const regionalSeverityStats = useMemo(() => {
+    let totalCritical = 0;
+    let totalHigh = 0;
+    regionalSeverityTrendData.forEach((day) => {
+      totalCritical += day.critical;
+      totalHigh += day.high;
+    });
+    return {
+      totalCritical,
+      totalHigh,
+      totalCombined: totalCritical + totalHigh,
+    };
+  }, [regionalSeverityTrendData]);
 
   // Aggregate stats derived from the 30-day series
   const stats = useMemo(() => {
@@ -645,6 +726,40 @@ export default function TrendsPanel({ events }: TrendsPanelProps) {
     return null;
   };
 
+  const RegionalSeverityTooltip = ({ active, payload }: any) => {
+    if (active && payload && payload.length) {
+      const data = payload[0].payload;
+      return (
+        <div className="bg-slate-900 border border-slate-850 p-2.5 rounded-lg shadow-xl text-white font-sans text-xs select-none">
+          <p className="font-bold text-slate-300 border-b border-slate-800 pb-1.5 mb-1.5 flex items-center gap-1">
+            <Calendar size={11} className="text-red-400 animate-pulse" /> {data.fullDate}
+          </p>
+          <div className="space-y-1 font-medium text-[11px]">
+            <div className="flex justify-between gap-6">
+              <span className="text-red-400 flex items-center gap-1">
+                <span className="h-1.5 w-1.5 bg-[#EF4444] rounded-full"></span> Critical:
+              </span>
+              <strong className="font-mono text-red-500 font-extrabold">{data.critical}</strong>
+            </div>
+
+            <div className="flex justify-between gap-6">
+              <span className="text-orange-400 flex items-center gap-1">
+                <span className="h-1.5 w-1.5 bg-[#F97316] rounded-full"></span> High:
+              </span>
+              <strong className="font-mono text-orange-400 font-bold">{data.high}</strong>
+            </div>
+
+            <div className="flex justify-between gap-6 border-t border-slate-800 pt-1 mt-1">
+              <span className="text-slate-400">Combined:</span>
+              <strong className="font-mono text-white font-extrabold">{data.combined}</strong>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return null;
+  };
+
   return (
     <div className="h-full flex flex-col bg-white overflow-hidden">
       
@@ -953,6 +1068,87 @@ export default function TrendsPanel({ events }: TrendsPanelProps) {
                   )}
                 </ResponsiveContainer>
               </div>
+            </div>
+
+            {/* Regional Severity Line Chart Visualization */}
+            <div id="recharts-regional-severity-container" className="bg-slate-50 border border-slate-200 rounded-xl p-3 shadow-inner">
+              <div className="flex items-center justify-between mb-3 border-b border-slate-200 pb-2">
+                <div className="space-y-0.5">
+                  <span className="text-[10px] uppercase font-mono font-black tracking-wider text-slate-500 flex items-center gap-1.5">
+                    <AlertTriangle size={12} className="text-red-500 animate-pulse" />
+                    Regional Severe Incident Frequency
+                  </span>
+                  <p className="text-[10px] font-sans text-slate-500 font-semibold">
+                    Focus Region: <span className="text-blue-605 font-bold text-blue-600">{selectedCity || "Saskatchewan (All)"}</span>
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <span className="text-[9px] font-mono font-extrabold px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200 animate-pulse">
+                    🔴 {regionalSeverityStats.totalCritical} Critical
+                  </span>
+                  <span className="text-[9px] font-mono font-extrabold px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 border border-orange-200">
+                    🟠 {regionalSeverityStats.totalHigh} High
+                  </span>
+                </div>
+              </div>
+
+              {regionalSeverityStats.totalCombined === 0 ? (
+                <div className="text-center py-8 text-xs text-slate-400 font-semibold select-none bg-white rounded-lg border border-slate-150 p-4">
+                  <AlertCircle size={20} className="mx-auto text-slate-300 mb-1.5" />
+                  No high or critical incidents reported in {selectedCity || "Saskatchewan (All)"} during the last 30 days.
+                </div>
+              ) : (
+                <div className="w-full h-[185px] text-[10px] font-mono bg-white border border-slate-200 p-2 rounded-lg shadow-sm">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart
+                      data={regionalSeverityTrendData}
+                      margin={{ top: 10, right: 10, left: -25, bottom: 0 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
+                      <XAxis 
+                        dataKey="dateStr" 
+                        tickLine={false} 
+                        axisLine={{ stroke: "#E2E8F0" }} 
+                        stroke="#64748B" 
+                        dy={6}
+                        minTickGap={15}
+                      />
+                      <YAxis 
+                        tickLine={false} 
+                        axisLine={false} 
+                        stroke="#64748B" 
+                        allowDecimals={false}
+                      />
+                      <Tooltip content={<RegionalSeverityTooltip />} />
+                      <Legend 
+                        verticalAlign="top" 
+                        height={28} 
+                        iconType="circle"
+                        iconSize={6}
+                        wrapperStyle={{ fontSize: "9px", fontFamily: "monospace", textTransform: "uppercase" }}
+                      />
+                      <Line 
+                        type="monotone" 
+                        name="Critical Severity"
+                        dataKey="critical" 
+                        stroke="#EF4444" 
+                        strokeWidth={2.5}
+                        dot={false}
+                        activeDot={{ r: 4 }}
+                      />
+                      <Line 
+                        type="monotone" 
+                        name="High Severity"
+                        dataKey="high" 
+                        stroke="#F97316" 
+                        strokeWidth={2}
+                        dot={false}
+                        activeDot={{ r: 4 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </div>
 
             {/* Category Breakdown Donut Chart */}
