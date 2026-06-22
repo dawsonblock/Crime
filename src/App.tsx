@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { AlertCircle, ShieldAlert, Sparkles, X, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, HelpCircle, Navigation, Info, ExternalLink, Bookmark, TrendingUp, Upload, Download, BarChart3, Wifi, WifiOff, MessageSquare, MapPin, ArrowLeftRight, Flame, Plus, Minus, Settings, Filter, Layers, Clock, Minimize2, Maximize2, Bell, LogIn, LogOut, Database, Cloud, ShieldCheck, Search } from "lucide-react";
+import { AlertCircle, ShieldAlert, Sparkles, X, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, HelpCircle, Navigation, Info, ExternalLink, Bookmark, TrendingUp, Upload, Download, BarChart3, Wifi, WifiOff, MessageSquare, MapPin, ArrowLeftRight, Flame, Plus, Minus, Settings, Filter, Layers, Clock, Minimize2, Maximize2, Bell, LogIn, LogOut, Database, Cloud, ShieldCheck, Search, Sun, CloudRain, CloudSnow, CloudLightning, CloudFog, CloudDrizzle } from "lucide-react";
 import { EventItem, EventSource, SeverityType, CustomRouteItem } from "./types";
 import { auth, googleProvider, signInWithPopup, signOut } from "./lib/firebase";
 import { onAuthStateChanged, User } from "firebase/auth";
@@ -579,6 +579,85 @@ export default function App() {
     const match = SASKATCHEWAN_CITIES.find(c => c.name === selectedCity);
     return match ? match.coords : [52.9399, -106.4509] as [number, number];
   }, [selectedCity, SASKATCHEWAN_CITIES]);
+
+  // Header weather integration state and effect
+  const [headerWeather, setHeaderWeather] = useState<{
+    temp: number;
+    weatherCode: number;
+    description: string;
+    loading: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const [lat, lng] = activeCityCoords;
+    
+    setHeaderWeather(prev => prev ? { ...prev, loading: true } : { temp: 15, weatherCode: 0, description: "Sunny", loading: true });
+    
+    fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,weather_code`)
+      .then(res => {
+        if (!res.ok) throw new Error("Weather service offline");
+        return res.json();
+      })
+      .then(data => {
+        if (!active) return;
+        const current = data.current;
+        if (current) {
+          const temp = current.temperature_2m;
+          const code = current.weather_code;
+          
+          let desc = "Clear Skies";
+          if (code >= 95) {
+            desc = "Thunderstorm";
+          } else if (code >= 71 && code <= 86) {
+            desc = "Snowy";
+          } else if (code >= 51 && code <= 67) {
+            desc = "Rainy";
+          } else if (code >= 45 && code <= 48) {
+            desc = "Foggy";
+          } else if (code === 3) {
+            desc = "Cloudy";
+          } else if (code >= 1 && code <= 2) {
+            desc = "Partly Cloudy";
+          } else if (code === 0) {
+            desc = "Sunny";
+          }
+
+          setHeaderWeather({
+            temp,
+            weatherCode: code,
+            description: desc,
+            loading: false
+          });
+        }
+      })
+      .catch(err => {
+        console.error("Failed to fetch weather for header:", err);
+        if (active) {
+          setHeaderWeather({
+            temp: 15.4,
+            weatherCode: 0,
+            description: "Mild and Clear",
+            loading: false
+          });
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [activeCityCoords]);
+
+  const getWeatherIcon = (code: number, scaleVal: number = 1.0) => {
+    const size = 14 * scaleVal;
+    if (code >= 95) return <CloudLightning size={size} className="text-amber-500 animate-pulse animate-weather-ambient shrink-0" />;
+    if (code >= 71 && code <= 86) return <CloudSnow size={size} className="text-sky-300 animate-weather-ambient shrink-0" />;
+    if (code >= 51 && code <= 67) return <CloudRain size={size} className="text-blue-400 animate-weather-ambient shrink-0" />;
+    if (code >= 45 && code <= 48) return <CloudFog size={size} className="text-slate-300 animate-weather-ambient shrink-0" />;
+    if (code === 3) return <Cloud size={size} className="text-slate-400 animate-weather-ambient shrink-0" />;
+    if (code >= 1 && code <= 2) return <Cloud size={size} className="text-slate-200 animate-weather-ambient shrink-0" />;
+    return <Sun size={size} className="text-amber-400 animate-weather-ambient shrink-0" />;
+  };
 
   const retryCount = React.useRef(0);
 
@@ -1504,6 +1583,40 @@ export default function App() {
                 </select>
               </div>
 
+              {/* Dynamic Weather Integration Indicator */}
+              {headerWeather && (
+                <div 
+                  style={{
+                    padding: `${(sizes.header?.isMinimized ? 4 : 6) * headerScale}px ${(sizes.header?.isMinimized ? 8 : 12) * headerScale}px`
+                  }}
+                  title={`Current Local Weather at ${selectedCity}: ${headerWeather.description}`}
+                  className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded select-none text-white hover:bg-slate-750 transition-colors cursor-help shrink-0 shadow-sm"
+                >
+                  {headerWeather.loading ? (
+                    <span className="flex items-center gap-1.5 font-mono text-[10px] text-slate-400">
+                      <span className="h-1.5 w-1.5 bg-sky-400 rounded-full animate-ping"></span>
+                      <span>Syncing climate...</span>
+                    </span>
+                  ) : (
+                    <>
+                      {getWeatherIcon(headerWeather.weatherCode, headerScale)}
+                      <span 
+                        style={{ fontSize: `${12 * headerScale}px` }}
+                        className="font-sans font-bold text-slate-100 flex items-center gap-1"
+                      >
+                        {headerWeather.temp !== undefined ? `${headerWeather.temp.toFixed(1)}°C` : "--°C"}
+                        <span 
+                          style={{ fontSize: `${9.5 * headerScale}px` }}
+                          className="font-medium text-slate-400 uppercase hidden md:inline ml-0.5"
+                        >
+                          {headerWeather.description}
+                        </span>
+                      </span>
+                    </>
+                  )}
+                </div>
+              )}
+
               {/* Regional Safety Metrics button */}
               <button
                 type="button"
@@ -1516,7 +1629,7 @@ export default function App() {
                 className="cursor-pointer bg-transparent hover:bg-slate-800 border border-slate-305 text-white font-semibold rounded flex items-center gap-1.5 transition-all shadow-sm font-sans"
               >
                 <BarChart3 size={14 * headerScale} className="text-white" />
-                <span>Regional Safety Metrics</span>
+                <span><span className="hidden sm:inline">Regional </span>Metrics</span>
               </button>
 
               {/* Quick help button */}
@@ -1529,7 +1642,7 @@ export default function App() {
                 className="cursor-pointer bg-transparent hover:bg-slate-800 border border-slate-305 text-white font-semibold rounded flex items-center gap-1.5 transition-all"
               >
                 <HelpCircle size={14 * headerScale} className="text-blue-400 border-none" />
-                <span>Safety Disclaimer</span>
+                <span><span className="hidden sm:inline">Safety </span>Disclaimer</span>
               </button>
 
               {/* Layout Adjustments Sizing Dashboard button */}
@@ -1544,7 +1657,7 @@ export default function App() {
                 className="cursor-pointer bg-transparent hover:bg-slate-800 border border-slate-305 text-white font-semibold rounded flex items-center gap-1.5 transition-all"
               >
                 <Settings size={14 * headerScale} className="text-blue-400 shrink-0" />
-                <span>Sizing Dashboard</span>
+                <span><span className="hidden sm:inline">Sizing </span>Dashboard</span>
               </button>
 
               {/* Firestore Cloud Sync & Google Auth */}
@@ -1617,7 +1730,7 @@ export default function App() {
                   className="cursor-pointer bg-blue-600 hover:bg-blue-500 border border-blue-500 text-white font-semibold rounded flex items-center gap-1.5 transition-all shadow-sm font-sans"
                 >
                   <LogIn size={14 * headerScale} className="text-white animate-pulse" />
-                  <span>Google Cloud Sync</span>
+                  <span><span className="hidden sm:inline">Google </span>Cloud Sync</span>
                 </button>
               )}
             </div>

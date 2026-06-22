@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import L from "leaflet";
 import { EventItem, SeverityType, CustomRouteItem } from "../types";
-import { MapPin, Navigation, Eye, EyeOff, Layers, ZoomIn, Info, Ruler, X, Printer, RotateCcw, RotateCw, Camera, Download, Share2, Copy, Loader2, Check, Route, Waypoints, Play, Pause, Clock, Calendar, FastForward, CloudLightning, Lock, Unlock, Compass } from "lucide-react";
+import { MapPin, Navigation, Eye, EyeOff, Layers, ZoomIn, Info, Ruler, X, Printer, RotateCcw, RotateCw, Camera, Download, Share2, Copy, Loader2, Check, Route, Waypoints, Play, Pause, Clock, Calendar, FastForward, CloudLightning, Lock, Unlock, Compass, Settings } from "lucide-react";
 import html2canvas from "html2canvas";
 import WebGLHeatmapOverlay from "./WebGLHeatmapOverlay";
 
@@ -358,6 +358,7 @@ export default function IncidentMap({
     }
   });
   const [isDraggingFloatingPanel, setIsDraggingFloatingPanel] = useState<boolean>(false);
+  const [isFloatingPanelCollapsed, setIsFloatingPanelCollapsed] = useState<boolean>(false);
 
   useEffect(() => {
     try {
@@ -2072,30 +2073,61 @@ export default function IncidentMap({
       )}
 
       {/* Floating Canvas controls */}
-      <div 
-        style={{ width: `${floatingPanelWidth}px` }}
-        className={`absolute top-4 right-4 z-[500] flex flex-col gap-2 print-hidden ${
-          isDraggingFloatingPanel ? "select-none" : "transition-all duration-200"
-        }`}
-      >
-        {/* Left Resize Handle Gutter */}
-        <div
-          onMouseDown={handleFloatingPanelDragStart}
-          className={`absolute top-0 -left-3 w-3 h-full cursor-col-resize z-[501] group flex items-center justify-center select-none ${
-            isDraggingFloatingPanel ? "bg-indigo-600/10" : "hover:bg-indigo-600/5"
-          }`}
-          title="Drag left or right with your cursor to resize these display panels"
+      {isFloatingPanelCollapsed ? (
+        <button
+          onClick={() => setIsFloatingPanelCollapsed(false)}
+          className="absolute top-4 right-4 z-[500] px-3 py-2 bg-slate-900 border border-slate-700 text-white hover:bg-slate-800 transition-all rounded-lg shadow-lg flex items-center gap-1.5 text-xs font-bold uppercase font-mono tracking-wider print-hidden cursor-pointer"
+          title="Restore map display filters and layer controls"
         >
-          <div className={`w-1 h-32 bg-slate-305 hover:bg-blue-600 rounded-full transition-all duration-150 ${
-            isDraggingFloatingPanel ? "bg-blue-600 h-48 opacity-100 scale-x-125" : "opacity-45 group-hover:opacity-100"
-          }`} />
-          {/* Subtle cursor direction indicators */}
-          <div className="hidden group-hover:flex flex-col gap-1 absolute text-[8px] text-blue-500 font-extrabold select-none pointer-events-none text-center leading-none">
-            <span>◀</span>
-            <span>▶</span>
+          <Settings size={13} className="text-blue-500 animate-spin-slow" />
+          <span>Layers & Tools</span>
+        </button>
+      ) : (
+        <div 
+          style={{ 
+            width: `${floatingPanelWidth}px`,
+            maxHeight: 'calc(100% - 2.5rem)'
+          }}
+          className={`absolute top-4 right-4 z-[500] flex flex-col gap-1.5 print-hidden ${
+            isDraggingFloatingPanel ? "select-none" : "transition-all duration-200"
+          }`}
+        >
+          {/* Compact Header for Folding/Collapsing map panel */}
+          <div className="bg-slate-950/95 text-white rounded-lg px-2.5 py-1.5 flex items-center justify-between text-[11px] font-bold shadow-sm border border-slate-750 shrink-0 select-none">
+            <span className="flex items-center gap-1 uppercase tracking-wider font-mono">
+              <Settings size={12} className="text-blue-400 rotate-45" />
+              <span>Map Layers & Tools</span>
+            </span>
+            <button
+              onClick={() => setIsFloatingPanelCollapsed(true)}
+              className="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded transition-colors cursor-pointer"
+              title="Minimize Map Controls Panel"
+            >
+              <X size={12} className="stroke-[2.5]" />
+            </button>
           </div>
-        </div>
-        {/* Style selection */}
+
+          {/* Left Resize Handle Gutter */}
+          <div
+            onMouseDown={handleFloatingPanelDragStart}
+            className={`absolute top-0 -left-3 w-3 h-full cursor-col-resize z-[501] group flex items-center justify-center select-none ${
+              isDraggingFloatingPanel ? "bg-indigo-600/10" : "hover:bg-indigo-600/5"
+            }`}
+            title="Drag left or right with your cursor to resize these display panels"
+          >
+            <div className={`w-1 h-32 bg-slate-305 hover:bg-blue-600 rounded-full transition-all duration-150 ${
+              isDraggingFloatingPanel ? "bg-blue-600 h-48 opacity-100 scale-x-125" : "opacity-45 group-hover:opacity-100"
+            }`} />
+            {/* Subtle cursor direction indicators */}
+            <div className="hidden group-hover:flex flex-col gap-1 absolute text-[8px] text-blue-500 font-extrabold select-none pointer-events-none text-center leading-none">
+              <span>◀</span>
+              <span>▶</span>
+            </div>
+          </div>
+
+        {/* Scrollable controls container to ensure visibility at all aspect ratios / viewport heights */}
+        <div className="w-full flex-1 flex flex-col gap-2 overflow-y-auto overflow-x-hidden pr-1 pb-2 scrollbar-thin">
+          {/* Style selection */}
         <div className="bg-white border border-slate-200 rounded-lg p-1 shadow-sm flex gap-1">
           <button
             id="map-style-dark"
@@ -2653,7 +2685,8 @@ export default function IncidentMap({
             <Printer size={13} />
           </button>
         </div>
-      </div>
+        </div>
+      </div>)}
 
       {/* Mini warning tag positioned perfectly above the bottom-right coordinate info panel */}
       <div className="absolute bottom-[52px] right-4 z-[400] bg-white/95 border border-slate-200 rounded px-2.5 py-1.5 text-[9px] font-mono text-slate-500 shadow-sm flex items-center gap-1.5 print-hidden">

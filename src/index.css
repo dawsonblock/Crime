@@ -281,3 +281,21 @@
     color: #000000 !important;
   }
 }
+
+/* Custom ambient hovering and pulsing glow animations for weather integration */
+@keyframes weather-float {
+  0% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-2.5px) rotate(1.5deg); }
+  100% { transform: translateY(0px) rotate(0deg); }
+}
+
+@keyframes weather-gentle-pulse {
+  0% { filter: drop-shadow(0 0 1px rgba(251, 191, 36, 0.15)) scale(1); }
+  50% { filter: drop-shadow(0 0 5px rgba(249, 115, 22, 0.5)) scale(1.06); }
+  100% { filter: drop-shadow(0 0 1px rgba(251, 191, 36, 0.15)) scale(1); }
+}
+
+.animate-weather-ambient {
+  animation: weather-float 4s ease-in-out infinite, weather-gentle-pulse 3s ease-in-out infinite;
+}
+
