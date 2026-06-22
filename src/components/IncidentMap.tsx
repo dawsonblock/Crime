@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import L from "leaflet";
 import { EventItem, SeverityType, CustomRouteItem } from "../types";
-import { MapPin, Navigation, Eye, EyeOff, Layers, ZoomIn, Info, Ruler, X, Printer, RotateCcw, RotateCw, Camera, Download, Share2, Copy, Loader2, Check, Route, Waypoints, Play, Pause, Clock, Calendar, FastForward, CloudLightning } from "lucide-react";
+import { MapPin, Navigation, Eye, EyeOff, Layers, ZoomIn, Info, Ruler, X, Printer, RotateCcw, RotateCw, Camera, Download, Share2, Copy, Loader2, Check, Route, Waypoints, Play, Pause, Clock, Calendar, FastForward, CloudLightning, Lock, Unlock, Compass } from "lucide-react";
 import html2canvas from "html2canvas";
 import WebGLHeatmapOverlay from "./WebGLHeatmapOverlay";
 
@@ -60,6 +60,7 @@ interface IncidentMapProps {
   restrictHeatmapToZones?: boolean;
   clusterPins?: boolean;
   setClusterPins?: (val: boolean) => void;
+  takeSnapshotRef?: React.MutableRefObject<(() => Promise<string | null>) | null>;
 }
 
 // Haversine distance calculator in meters
@@ -249,6 +250,7 @@ export default function IncidentMap({
   restrictHeatmapToZones,
   clusterPins: clusterPinsProp,
   setClusterPins: setClusterPinsProp,
+  takeSnapshotRef,
 }: IncidentMapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapCaptureRef = useRef<HTMLDivElement>(null);
@@ -442,6 +444,7 @@ export default function IncidentMap({
   const [currentZoom, setCurrentZoom] = useState<number>(12);
   const [liveCenter, setLiveCenter] = useState<{ lat: number; lng: number }>({ lat: 52.1332, lng: -106.6700 });
   const [mapRotation, setMapRotation] = useState<number>(0);
+  const [isRotationLocked, setIsRotationLocked] = useState<boolean>(false);
 
   const [isDropPinMode, setIsDropPinMode] = useState<boolean>(false);
   const [pendingPinCoords, setPendingPinCoords] = useState<{ lat: number; lng: number } | null>(null);
@@ -751,8 +754,8 @@ export default function IncidentMap({
   const [copiedNotification, setCopiedNotification] = useState<boolean>(false);
   const [shareSuccess, setShareSuccess] = useState<boolean>(false);
 
-  const handleTakeSnapshot = async () => {
-    if (!mapCaptureRef.current) return;
+  const handleTakeSnapshotAndReturn = async (): Promise<string | null> => {
+    if (!mapCaptureRef.current) return null;
     setIsCapturing(true);
 
     try {
@@ -792,16 +795,35 @@ export default function IncidentMap({
       targetElement.style.transform = originalTransform;
       targetElement.style.transition = originalTransition;
 
-      const dataUrl = canvas.toDataURL("image/png");
-      setSnapshotUrl(dataUrl);
-      setIsSnapshotModalOpen(true);
+      return canvas.toDataURL("image/png");
     } catch (error) {
       console.error("Error capturing viewport snapshot: ", error);
-      alert("Failed to generate map viewport snapshot. Please check browser permissions.");
+      return null;
     } finally {
       setIsCapturing(false);
     }
   };
+
+  const handleTakeSnapshot = async () => {
+    const dataUrl = await handleTakeSnapshotAndReturn();
+    if (dataUrl) {
+      setSnapshotUrl(dataUrl);
+      setIsSnapshotModalOpen(true);
+    } else {
+      alert("Failed to generate map viewport snapshot. Please check browser permissions.");
+    }
+  };
+
+  useEffect(() => {
+    if (takeSnapshotRef) {
+      takeSnapshotRef.current = handleTakeSnapshotAndReturn;
+    }
+    return () => {
+      if (takeSnapshotRef) {
+        takeSnapshotRef.current = null;
+      }
+    };
+  }, [takeSnapshotRef]);
 
   const downloadSnapshot = () => {
     if (!snapshotUrl) return;
@@ -1910,7 +1932,7 @@ export default function IncidentMap({
         ref={mapCaptureRef}
         className="flex-1 w-full outline-none relative transition-transform duration-500 ease-out origin-center"
         style={{ 
-          transform: `rotate(${mapRotation}deg) scale(${mapRotation === 0 ? 1 : dynamicScale})` 
+          transform: `rotate(${mapRotation}deg) scale(${dynamicScale})` 
         }}
       >
         {/* Target canvas element */}
@@ -1976,7 +1998,7 @@ export default function IncidentMap({
             {/* Rotating compass needle dial */}
             <div 
               className="absolute transition-transform duration-500 ease-out"
-              style={{ transform: `rotate(${mapRotation}deg)` }}
+              style={{ transform: `rotate(${-mapRotation}deg)` }}
             >
               <svg width="10" height="26" viewBox="0 0 10 26" className="drop-shadow-sm pointer-events-none">
                 {/* North Red Needle */}
@@ -2001,9 +2023,11 @@ export default function IncidentMap({
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                setMapRotation((prev) => (prev - 15 + 360) % 360);
+                if (!isRotationLocked) {
+                  setMapRotation((prev) => (prev - 15 + 360) % 360);
+                }
               }}
-              className="p-0.5 hover:bg-slate-100 rounded text-slate-500 hover:text-blue-600 transition-colors cursor-pointer flex items-center justify-center"
+              className={`p-0.5 hover:bg-slate-100 rounded text-slate-500 hover:text-blue-600 transition-colors cursor-pointer flex items-center justify-center ${isRotationLocked ? 'opacity-50 cursor-not-allowed' : ''}`}
               title="Rotate Map Left (15°)"
             >
               <RotateCcw size={10} />
@@ -2011,12 +2035,24 @@ export default function IncidentMap({
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                setMapRotation((prev) => (prev + 15) % 360);
+                if (!isRotationLocked) {
+                  setMapRotation((prev) => (prev + 15) % 360);
+                }
               }}
-              className="p-0.5 hover:bg-slate-100 rounded text-slate-500 hover:text-blue-600 transition-colors cursor-pointer flex items-center justify-center"
+              className={`p-0.5 hover:bg-slate-100 rounded text-slate-500 hover:text-blue-600 transition-colors cursor-pointer flex items-center justify-center ${isRotationLocked ? 'opacity-50 cursor-not-allowed' : ''}`}
               title="Rotate Map Right (15°)"
             >
               <RotateCw size={10} />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsRotationLocked(!isRotationLocked);
+              }}
+              className={`p-0.5 hover:bg-slate-100 rounded ${isRotationLocked ? 'text-red-500' : 'text-slate-500'} hover:text-blue-600 transition-colors cursor-pointer flex items-center justify-center`}
+              title={isRotationLocked ? "Unlock Map Rotation" : "Lock Map Rotation"}
+            >
+              {isRotationLocked ? <Lock size={10} /> : <Unlock size={10} />}
             </button>
           </div>
         </div>

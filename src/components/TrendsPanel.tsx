@@ -180,6 +180,95 @@ export default function TrendsPanel({ events }: TrendsPanelProps) {
     };
   }, [trendData]);
 
+  // Month-over-Month calculation using calendar dates with dynamic rolling fallback
+  const momStats = useMemo(() => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth(); // 0-indexed (e.g. 5 is June)
+
+    // Calendar month-based comparison:
+    const thisMonthEvents = events.filter(evt => {
+      try {
+        const pubDate = new Date(evt.publishedAt);
+        return pubDate.getFullYear() === currentYear && pubDate.getMonth() === currentMonth;
+      } catch {
+        return false;
+      }
+    });
+
+    const prevMonthDate = new Date(currentYear, currentMonth - 1, 1);
+    const prevYear = prevMonthDate.getFullYear();
+    const prevMonth = prevMonthDate.getMonth();
+
+    const prevMonthEvents = events.filter(evt => {
+      try {
+        const pubDate = new Date(evt.publishedAt);
+        return pubDate.getFullYear() === prevYear && pubDate.getMonth() === prevMonth;
+      } catch {
+        return false;
+      }
+    });
+
+    // Also support rolling 30-day window comparison in case of concentrated data
+    const rolling30Ms = 30 * 24 * 60 * 60 * 1000;
+    const rolling60Ms = 60 * 24 * 60 * 60 * 1000;
+    const nowMs = now.getTime();
+
+    const rollingThisMonthEvents = events.filter(evt => {
+      try {
+        const pubMs = new Date(evt.publishedAt).getTime();
+        return pubMs >= (nowMs - rolling30Ms) && pubMs <= nowMs;
+      } catch {
+        return false;
+      }
+    });
+
+    const rollingPrevMonthEvents = events.filter(evt => {
+      try {
+        const pubMs = new Date(evt.publishedAt).getTime();
+        return pubMs >= (nowMs - rolling60Ms) && pubMs < (nowMs - rolling30Ms);
+      } catch {
+        return false;
+      }
+    });
+
+    // Use calendar months if either has some events, otherwise fallback to rolling 30-day chunks
+    const useCalendar = prevMonthEvents.length > 0 || thisMonthEvents.length > 0;
+
+    const currentCount = useCalendar ? thisMonthEvents.length : rollingThisMonthEvents.length;
+    const previousCount = useCalendar ? prevMonthEvents.length : rollingPrevMonthEvents.length;
+    
+    const labelCurrent = useCalendar 
+      ? now.toLocaleString("default", { month: "short" }) 
+      : "Last 30D";
+    const labelPrevious = useCalendar 
+      ? prevMonthDate.toLocaleString("default", { month: "short" }) 
+      : "Prior 30D";
+
+    let pctChange = 0;
+    if (previousCount > 0) {
+      pctChange = Math.round(((currentCount - previousCount) / previousCount) * 100);
+    } else if (currentCount > 0) {
+      pctChange = 100;
+    }
+
+    const isImproving = pctChange < 0;
+    const isDeclining = pctChange > 0;
+    const isFlat = pctChange === 0;
+
+    return {
+      currentCount,
+      previousCount,
+      labelCurrent,
+      labelPrevious,
+      pctChange: Math.abs(pctChange),
+      isImproving,
+      isDeclining,
+      isFlat,
+      useCalendar
+    };
+  }, [events]);
+
   // Calculate distribution of incident categories for a Donut Chart
   const categoryData = useMemo(() => {
     const rawCounts: Record<string, number> = {};
@@ -683,36 +772,65 @@ export default function TrendsPanel({ events }: TrendsPanelProps) {
         ) : (
           <>
             {/* Metric widgets block */}
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
               
-              <div className="bg-slate-50 border border-slate-150 rounded-lg p-2 text-center shadow-inner">
+              <div className="bg-slate-50 border border-slate-150 rounded-lg p-2 text-center shadow-inner flex flex-col justify-between">
                 <span className="block text-[8px] font-mono font-extrabold uppercase text-slate-400">30D Incidents</span>
                 <span className="block text-sm font-extrabold text-slate-800 mt-0.5 font-mono">{stats.grandTotal}</span>
                 <span className="block text-[8px] text-slate-405 font-medium mt-0.5">cumulative count</span>
               </div>
 
-              <div className="bg-slate-50 border border-slate-150 rounded-lg p-2 text-center shadow-inner">
+              <div className="bg-slate-50 border border-slate-150 rounded-lg p-2 text-center shadow-inner flex flex-col justify-between">
                 <span className="block text-[8px] font-mono font-extrabold uppercase text-slate-400">Daily Average</span>
                 <span className="block text-sm font-extrabold text-blue-600 mt-0.5 font-mono">{stats.dailyAverage}</span>
                 <span className="block text-[8px] text-slate-405 font-medium mt-0.5">incidents / day</span>
               </div>
 
-              <div className="bg-slate-50 border border-slate-150 rounded-lg p-2 text-center shadow-inner">
+              <div className="bg-slate-50 border border-slate-150 rounded-lg p-2 text-center shadow-inner flex flex-col justify-between">
                 <span className="block text-[8px] font-mono font-extrabold uppercase text-slate-400">Trajectory</span>
-                {stats.direction === "up" ? (
-                  <div className="flex items-center justify-center gap-0.5 mt-0.5 text-red-500 font-mono font-extrabold text-xs">
-                    <TrendingUp size={12} className="shrink-0" />
-                    <span>+{stats.velocityPercent}%</span>
-                  </div>
-                ) : stats.direction === "down" ? (
-                  <div className="flex items-center justify-center gap-0.5 mt-0.5 text-emerald-600 font-mono font-extrabold text-xs">
-                    <TrendingDown size={12} className="shrink-0" />
-                    <span>-{stats.velocityPercent}%</span>
-                  </div>
-                ) : (
-                  <span className="block text-xs font-extrabold text-slate-500 mt-0.5 font-mono">STABLE</span>
-                )}
+                <div>
+                  {stats.direction === "up" ? (
+                    <div className="flex items-center justify-center gap-0.5 mt-0.5 text-red-500 font-mono font-extrabold text-xs">
+                      <TrendingUp size={12} className="shrink-0" />
+                      <span>+{stats.velocityPercent}%</span>
+                    </div>
+                  ) : stats.direction === "down" ? (
+                    <div className="flex items-center justify-center gap-0.5 mt-0.5 text-emerald-600 font-mono font-extrabold text-xs">
+                      <TrendingDown size={12} className="shrink-0" />
+                      <span>-{stats.velocityPercent}%</span>
+                    </div>
+                  ) : (
+                    <span className="block text-xs font-extrabold text-slate-500 mt-0.5 font-mono">STABLE</span>
+                  )}
+                </div>
                 <span className="block text-[8px] text-slate-405 font-medium mt-0.5">vs prior 15 days</span>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-150 rounded-lg p-2 text-center shadow-inner flex flex-col justify-between" id="mom-analytics-card">
+                <span className="block text-[8px] font-mono font-extrabold uppercase text-slate-400">Month over Month</span>
+                <div className="my-0.5 flex flex-col items-center justify-center">
+                  {momStats.isImproving ? (
+                    <div className="flex items-center justify-center gap-0.5 text-emerald-600 font-mono font-extrabold text-xs">
+                      <TrendingDown size={12} className="shrink-0 text-emerald-600" />
+                      <span>-{momStats.pctChange}% MoM</span>
+                    </div>
+                  ) : momStats.isDeclining ? (
+                    <div className="flex items-center justify-center gap-0.5 text-red-500 font-mono font-extrabold text-xs">
+                      <TrendingUp size={12} className="shrink-0 text-red-500" />
+                      <span>+{momStats.pctChange}% MoM</span>
+                    </div>
+                  ) : (
+                    <div className="text-slate-500 font-mono font-extrabold text-xs uppercase">
+                      Unchanged
+                    </div>
+                  )}
+                  <span className="text-[8px] font-extrabold text-slate-500 uppercase font-mono mt-0.5 tracking-wide">
+                    {momStats.isImproving ? "✅ Improving" : momStats.isDeclining ? "⚠️ Declining" : "Holding Flat"}
+                  </span>
+                </div>
+                <span className="block text-[8px] text-slate-405 font-medium leading-none">
+                  {momStats.labelCurrent} ({momStats.currentCount}) vs {momStats.labelPrevious} ({momStats.previousCount})
+                </span>
               </div>
 
             </div>

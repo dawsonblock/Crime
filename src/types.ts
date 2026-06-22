@@ -25,6 +25,12 @@ export interface EventItem {
   eventType: string; // e.g. 'assault', 'shooting', 'robbery', 'dangerous_person_alert'
   severity: SeverityType;
   confidence: number;
+  location_precision?: LocationPrecisionType;
+  incident_severity?: SeverityType;
+  active_risk_state?: 'active' | 'resolved' | 'historical' | 'unknown';
+  current_risk_score?: number;
+  geo_scope?: 'Saskatoon' | 'Saskatchewan' | 'national' | 'unknown';
+  confidence_score?: number;
   locationText: string;
   latitude: number;
   longitude: number;
@@ -62,4 +68,16 @@ export interface CustomRouteItem {
   createdAt: string;
   isActive?: boolean;
 }
+
+export interface ResolvedLocation {
+  latitude: number;
+  longitude: number;
+  displayLatitude?: number;
+  displayLongitude?: number;
+  locationPrecision: LocationPrecisionType;
+  location_precision?: LocationPrecisionType;
+  locationConfidence: number;
+  locationText: string;
+}
+
 

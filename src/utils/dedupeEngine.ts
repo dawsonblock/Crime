@@ -145,16 +145,12 @@ export function deduplicateAndClusterEvents(allEvents: EventItem[]): EventItem[]
         return selectPriority(curr) > selectPriority(best) ? curr : best;
       }, primary);
       
-      // Blended severity instead of "highest member wins" inflation!
-      const severityMap: Record<SeverityType, number> = { critical: 4, high: 3, medium: 2, low: 1 };
-      const reverseSeverityMap: Record<number, SeverityType> = { 4: "critical", 3: "high", 2: "medium", 1: "low" };
-      
-      let sumSeverityWeights = 0;
-      clusterCandidates.forEach(c => {
-        sumSeverityWeights += severityMap[c.severity] || 1;
-      });
-      const avgSeverityWeight = Math.round(sumSeverityWeights / clusterCandidates.length);
-      const blendedSeverity = reverseSeverityMap[Math.max(1, Math.min(4, avgSeverityWeight))] || "low";
+      // Anchor severity & threat metrics directly on the highest-trusted official source
+      const canonicalSeverity = bestEvent.severity || "low" as SeverityType;
+      const canonicalIncidentSeverity = bestEvent.incident_severity || canonicalSeverity;
+      const canonicalActiveRiskState = bestEvent.active_risk_state || "unknown";
+      const canonicalGeoScope = bestEvent.geo_scope || "unknown";
+      const canonicalCurrentRiskScore = bestEvent.current_risk_score !== undefined ? bestEvent.current_risk_score : 15;
       
       // Assemble aggregated summary detailing original sources
       let combinedSummary = `**Saskatoon Public Safety Intelligence Fusion [${clusterCandidates.length} linked reports]**:\n`;
@@ -162,8 +158,9 @@ export function deduplicateAndClusterEvents(allEvents: EventItem[]): EventItem[]
         combinedSummary += `• **${c.sourceName}**: *${c.title}* – ${c.summary.length > 155 ? c.summary.substring(0, 155) + "..." : c.summary}\n`;
       });
       
-      // Boost confidence as multiple sources confirm
-      const blendedConfidence = Math.min(1.0, Math.round((bestEvent.confidence + 0.05 * (clusterCandidates.length - 1)) * 100) / 100);
+      // Boost confidence slightly as multiple sources confirm, starting from the best event's base confidence
+      const baseConf = bestEvent.confidence_score !== undefined ? bestEvent.confidence_score : (bestEvent.confidence || 0.7);
+      const blendedConfidence = Math.min(1.0, Math.round((baseConf + 0.03 * (clusterCandidates.length - 1)) * 100) / 100);
       
       // Clean clone of candidates to strip any potential nested circular structures
       const cleanCandidates = clusterCandidates.map(c => {
@@ -177,8 +174,13 @@ export function deduplicateAndClusterEvents(allEvents: EventItem[]): EventItem[]
         id: `clust-${bestEvent.id}`,
         title: bestEvent.title.includes("Cluster") ? bestEvent.title : `${bestEvent.title} (Incident Cluster)`,
         summary: combinedSummary,
-        severity: blendedSeverity, // blended severity
+        severity: canonicalSeverity,
+        incident_severity: canonicalIncidentSeverity,
+        active_risk_state: canonicalActiveRiskState,
+        geo_scope: canonicalGeoScope,
+        current_risk_score: canonicalCurrentRiskScore,
         confidence: blendedConfidence,
+        confidence_score: blendedConfidence,
         sourcesList: sourcesList,
         dedupeHash: `fused-${bestEvent.id}-${clusterCandidates.length}`,
         linkedEvents: cleanCandidates

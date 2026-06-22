@@ -15,6 +15,21 @@ export default function ReportModal({ isOpen, onClose, onSubmit }: ReportModalPr
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const getIncidentCount = (text: string) => {
+    if (!text || text.trim().length < 5) return 0;
+    let chunks: string[] = [];
+    if (text.includes("\n---\n") || text.includes("\n===\n")) {
+      chunks = text.split(/\n-+\n|\n=+\n/).map(c => c.trim()).filter(c => c.length > 5);
+    } else if (text.trim().match(/^[-•*]\s+/m)) {
+      chunks = text.split(/^[-•*]\s+/m).map(c => c.trim()).filter(c => c.length > 5);
+    } else if (text.trim().match(/^\d+\.\s+/m)) {
+      chunks = text.split(/^\d+\.\s+/m).map(c => c.trim()).filter(c => c.length > 5);
+    } else {
+      chunks = text.split(/\n\s*\n+/).map(c => c.trim()).filter(c => c.length > 5);
+    }
+    return chunks.length || (text.trim().length > 5 ? 1 : 0);
+  };
+
   if (!isOpen) return null;
 
   const handleFormSubmit = async (e: React.FormEvent) => {
@@ -126,20 +141,38 @@ export default function ReportModal({ isOpen, onClose, onSubmit }: ReportModalPr
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-[10px] uppercase font-bold tracking-widest font-mono text-slate-400 block">
-              Raw Bulletin / Report Text *
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] uppercase font-bold tracking-widest font-mono text-slate-400 block">
+                Raw Bulletin / Report Text *
+              </label>
+              {rawText.trim().length >= 5 && (
+                <span className={`text-[9px] font-mono font-extrabold px-1.5 py-0.5 rounded-full ${
+                  getIncidentCount(rawText) > 1 
+                    ? "bg-emerald-100 text-emerald-800 border border-emerald-200 animate-pulse" 
+                    : "bg-slate-100 text-slate-600 border border-slate-200"
+                }`}>
+                  {getIncidentCount(rawText) > 1 
+                    ? `🛡️ Bulk Mode: Detected ${getIncidentCount(rawText)} Incidents` 
+                    : "📝 Mode: Single Incident"}
+                </span>
+              )}
+            </div>
             <textarea
               value={rawText}
               onChange={(e) => {
                 setRawText(e.target.value);
                 setErrorMessage(null);
               }}
-              rows={4}
-              placeholder="e.g. Police responded to an armed robbery call on Preston crossing. Incident was solved on scene with no injuries."
+              rows={5}
+              placeholder="e.g. Police responded to an armed robbery call on Preston crossing. Incident was solved on scene with no injuries.&#10;&#10;(To bulk submit multiple reports, separate each with a blank double-newline space)"
               className="w-full bg-slate-50 border border-slate-200 rounded p-3 text-xs placeholder-slate-400 text-slate-800 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all font-sans font-medium"
               required
             />
+            {getIncidentCount(rawText) > 1 && (
+              <p className="text-[10px] text-emerald-650 font-bold font-mono">
+                ✓ Auto-splitting raw text block into {getIncidentCount(rawText)} independent incidents to classify and geocode in a single batch.
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">
@@ -156,7 +189,7 @@ export default function ReportModal({ isOpen, onClose, onSubmit }: ReportModalPr
           </div>
 
           {/* Quick template seeds helper */}
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 border-t border-slate-150 pt-2">
             <span className="text-[10px] uppercase font-bold tracking-widest font-mono text-slate-400 block">
               Quick test templates:
             </span>
@@ -168,7 +201,7 @@ export default function ReportModal({ isOpen, onClose, onSubmit }: ReportModalPr
                     "Saskatoon Police reports high-priority break-ins along the Preston Crossing neighborhood. Multiple residential locks broken overnight."
                   )
                 }
-                className="bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-[10px] text-slate-600 px-2.5 py-1 rounded cursor-pointer transition-colors font-semibold"
+                className="bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-[10px] text-slate-600 px-2.5 py-1 rounded cursor-pointer transition-colors font-semibold shadow-sm"
               >
                 Preston Break-ins
               </button>
@@ -179,7 +212,7 @@ export default function ReportModal({ isOpen, onClose, onSubmit }: ReportModalPr
                     "Saskatchewan RCMP warning of massive traffic collision and vehicle damage around Highway 11 near Warman. Avoid central bypass lanes."
                   )
                 }
-                className="bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-[10px] text-slate-600 px-2.5 py-1 rounded cursor-pointer transition-colors font-semibold"
+                className="bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-[10px] text-slate-600 px-2.5 py-1 rounded cursor-pointer transition-colors font-semibold shadow-sm"
               >
                 RCMP Collision Alert
               </button>
@@ -190,9 +223,20 @@ export default function ReportModal({ isOpen, onClose, onSubmit }: ReportModalPr
                     "Government SIRT notice detailing official review of Saskatoon Police arrest on Broadway Avenue. Neutral evidence investigation underway."
                   )
                 }
-                className="bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-[10px] text-slate-600 px-2.5 py-1 rounded cursor-pointer transition-colors font-semibold"
+                className="bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-[10px] text-slate-600 px-2.5 py-1 rounded cursor-pointer transition-colors font-semibold shadow-sm"
               >
                 SIRT Broadway Probe
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  fillTemplate(
+                    `ASSAULT INCIDENT: Assault with a weapon took place on 800 block of Broadway Avenue, Saskatoon. Police arrest review underway.\n\nTRAFFIC ACCIDENT: Heavy vehicle collision reported around Circle Drive near Preston Crossing. Central lanes blocked.\n\nSASKATOON ALERTS: Police perimeter set up on Preston Avenue for active wanted person inquiry. Shelter in place advised.`
+                  )
+                }
+                className="bg-blue-50 border border-blue-200 text-blue-650 hover:bg-blue-100 text-[10px] px-2.5 py-1 rounded cursor-pointer transition-colors font-bold shadow-sm"
+              >
+                ⚡ TEST BULK (3 Incidents)
               </button>
             </div>
           </div>

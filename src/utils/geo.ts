@@ -1,6 +1,55 @@
-import { LocationPrecisionType } from "../types";
+import { LocationPrecisionType, ResolvedLocation } from "../types";
 
-export const saskatchewanCoordinatesMap: Record<string, { lat: number; lng: number }> = {
+// Coordinate boundaries for metropolitan Saskatoon
+export const SASKATOON_BOUNDS = {
+  minLat: 52.05,
+  maxLat: 52.25,
+  minLng: -106.85,
+  maxLng: -106.50
+};
+
+export function isWithinSaskatoonBounds(lat: number, lng: number): boolean {
+  return lat >= SASKATOON_BOUNDS.minLat && lat <= SASKATOON_BOUNDS.maxLat &&
+         lng >= SASKATOON_BOUNDS.minLng && lng <= SASKATOON_BOUNDS.maxLng;
+}
+
+// Saskatoon Known Neighborhood Centroids
+export const saskatoonNeighborhoods: Record<string, { lat: number; lng: number }> = {
+  "pleasant hill": { lat: 52.1265, lng: -106.6961 },
+  "stonebridge": { lat: 52.0945, lng: -106.6267 },
+  "nutana": { lat: 52.1194, lng: -106.6573 },
+  "sutherland": { lat: 52.1384, lng: -106.6025 },
+  "broadway": { lat: 52.1189, lng: -106.6565 },
+  "riversdale": { lat: 52.1245, lng: -106.6781 },
+  "downtown": { lat: 52.1301, lng: -106.6611 },
+  "city park": { lat: 52.1402, lng: -106.6552 },
+  "caswell hill": { lat: 52.1385, lng: -106.6788 },
+  "silverwood heights": { lat: 52.1762, lng: -106.6288 },
+  "westview": { lat: 52.1432, lng: -106.7262 },
+  "confederation park": { lat: 52.1444, lng: -106.7111 },
+  "briarwood": { lat: 52.1121, lng: -106.5762 },
+  "evergreen": { lat: 52.1644, lng: -106.5655 },
+  "hampton village": { lat: 52.1522, lng: -106.7277 },
+  "willowgrove": { lat: 52.1431, lng: -106.5562 },
+  "exhibition": { lat: 52.1022, lng: -106.6666 },
+  "reid park": { lat: 52.1190, lng: -106.7100 },
+  "forest grove": { lat: 52.1481, lng: -106.5862 },
+  "mayfair": { lat: 52.1470, lng: -106.6770 },
+  "meadowgreen": { lat: 52.1150, lng: -106.7050 },
+  "mount royal": { lat: 52.1320, lng: -106.7110 },
+  "lakewood": { lat: 52.1050, lng: -106.5920 },
+  "wildwood": { lat: 52.1150, lng: -106.6050 },
+  "rosewood": { lat: 52.0910, lng: -106.5800 },
+  "lakeridge": { lat: 52.1110, lng: -106.5510 },
+  "parkridge": { lat: 52.1180, lng: -106.7380 },
+  "fairhaven": { lat: 52.1110, lng: -106.7280 },
+  "dundonald": { lat: 52.1400, lng: -106.7320 },
+  "kensington": { lat: 52.1410, lng: -106.7580 },
+  "cooperstown": { lat: 52.1332, lng: -106.6700 } // city center fallback
+};
+
+// Major Saskatchewan City Centroids (Provincial scope)
+export const saskatchewanCities: Record<string, { lat: number; lng: number }> = {
   "swift current": { lat: 50.2853, lng: -107.7977 },
   "north battleford": { lat: 52.7576, lng: -108.2861 },
   "battleford": { lat: 52.7167, lng: -108.3167 },
@@ -18,111 +67,136 @@ export const saskatchewanCoordinatesMap: Record<string, { lat: number; lng: numb
   "rosetown": { lat: 51.5542, lng: -107.9897 },
   "outlook": { lat: 51.4939, lng: -107.0503 },
   "martensville": { lat: 52.2897, lng: -106.6667 },
-  "lumsden": { lat: 50.6436, lng: -104.8694 },
-  "fort qu'appelle": { lat: 50.7672, lng: -103.7917 },
-  "indian head": { lat: 50.5311, lng: -103.6681 },
-  "moosomin": { lat: 50.1417, lng: -101.6833 },
-  "carlyle": { lat: 49.6333, lng: -102.2667 },
-  "nipawin": { lat: 53.3644, lng: -104.0042 },
-  "tisdale": { lat: 52.8500, lng: -104.0531 },
-  "buffalo narrows": { lat: 55.8500, lng: -108.4833 },
-  "ile-a-la-crosse": { lat: 55.4500, lng: -107.9000 },
-  "la loche": { lat: 56.4833, lng: -109.4333 },
-  "rosthern": { lat: 52.6667, lng: -106.3333 },
-  "spiritwood": { lat: 53.3667, lng: -107.5167 },
-  "unity": { lat: 52.4500, lng: -109.1667 },
-  "biggar": { lat: 52.0500, lng: -107.9833 },
-  "davidson": { lat: 51.2667, lng: -105.9833 },
-  "watrous": { lat: 51.6833, lng: -105.4667 },
-  "wynyard": { lat: 51.7667, lng: -104.1833 },
-  "canora": { lat: 51.6333, lng: -102.4333 },
-  "kamsack": { lat: 51.5667, lng: -101.9000 },
+  "warman": { lat: 52.3219, lng: -106.5842 },
+  "regina": { lat: 50.4501, lng: -104.6181 },
+  "prince albert": { lat: 53.2033, lng: -105.7531 },
+  "moose jaw": { lat: 50.3933, lng: -105.5519 },
+  "dundurn": { lat: 51.8105, lng: -106.5034 },
+  "la ronge": { lat: 55.1017, lng: -105.2831 },
   "saskatchewan": { lat: 52.9399, lng: -106.4509 }
 };
 
-export const saskatoonCoordinatesMap: Record<string, { lat: number; lng: number }> = saskatchewanCoordinatesMap;
+// Check if addressText is potentially a junk/unextractable phrase rather than a real street address
+export function isValidSaskatoonAddressText(text: string): boolean {
+  if (!text || text.trim() === "") return false;
+  const cleaned = text.trim().toLowerCase();
 
-export function resolveSaskatchewanCoordinates(text: string, defaultLat = 52.1332, defaultLng = -106.6700) {
-  const norm = text.toLowerCase();
-  for (const [key, coords] of Object.entries(saskatchewanCoordinatesMap)) {
-    if (norm.includes(key)) {
-      return coords;
-    }
-  }
-  return { lat: defaultLat, lng: defaultLng };
+  // Guard against short fragments or pure numbers
+  if (cleaned.length < 4) return false;
+  
+  // Guard against common temporal, pronoun, or conversational words
+  const temporalGunk = /^(monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|afternoon|evening|night|yesterday|today|april|may|june|july|august|september|october|november|december|discovered|finding|discovering)$/i;
+  if (temporalGunk.test(cleaned)) return false;
+
+  // Guard against phrases indicating generic news text that leaked into geocoding
+  const newsLeakedGunk = [
+    "discovered monday", "discovered tuesday", "found monday", "police discovered", "reported a", 
+    "that resulted in", "four guns", "shot on", "stabbing on", "assault on", "investigation on",
+    "stolen on", "robbed on", "suspects were", "charges laid", "court hearing", "in court"
+  ];
+  if (newsLeakedGunk.some(phrase => cleaned.includes(phrase))) return false;
+
+  return true;
 }
 
-export function resolveSaskatoonCoordinates(text: string, defaultLat = 52.1332, defaultLng = -106.6700) {
-  return resolveSaskatchewanCoordinates(text, defaultLat, defaultLng);
+// Parsing street patterns like: "300 Block of 20th Street West"
+export function parseSaskatoonStreetPattern(text: string): string | null {
+  const norm = text.toLowerCase().trim();
+  
+  // Regular expressions to match common Saskatoon block-level and street layouts
+  const blockRegex = /\b(\d+)\s*(?:block\s*of|block)\s+([0-9a-z\s]+?\s+(?:avenue|ave|street|st|road|rd|crescent|cres|drive|dr|way|lane|ln|crossing|boulevard|blvd)(?:\s+(?:west|east|north|south|w|e|n|s))?)\b/i;
+  const matchBlock = text.match(blockRegex);
+  if (matchBlock) {
+    const num = matchBlock[1];
+    const street = matchBlock[2].trim();
+    return `${num} Block of ${street.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}`;
+  }
+
+  const intersectionRegex = /\b([a-z0-9\s]+?)\s+(?:and|at|\/|&)\s+([a-z0-9\s]+?)\s+(?:avenue|ave|street|st|road|rd|crescent|cres|drive|dr|way|boulevard|blvd)\b/i;
+  const matchIntersection = text.match(intersectionRegex);
+  if (matchIntersection) {
+    return `${matchIntersection[1].trim()} & ${matchIntersection[2].trim()}`;
+  }
+
+  return null;
 }
 
 export function extractLocationText(text: string): string {
   const lower = text.toLowerCase();
-  
-  for (const landmark of Object.keys(saskatoonCoordinatesMap)) {
-    if (lower.includes(landmark)) {
-      if (landmark === "broadway") return "Broadway Avenue, Saskatoon, SK";
-      if (landmark === "8th street") return "8th Street East, Saskatoon, SK";
-      if (landmark === "preston") return "Preston Avenue Crossing, Saskatoon, SK";
-      if (landmark === "33rd street") return "33rd Street West, Saskatoon, SK";
-      if (landmark === "circle drive") return "Circle Drive, Saskatoon, SK";
-      if (landmark === "20th street") return "20th Street West, Saskatoon, SK";
-      if (landmark === "central avenue") return "Central Avenue, Saskatoon, SK";
-      if (landmark === "sutherland") return "Sutherland, Saskatoon, SK";
-      if (landmark === "spadina") return "Spadina Crescent, Saskatoon, SK";
-      if (landmark === "downtown") return "Downtown Saskatoon, SK";
-      if (landmark === "pleasant hill") return "Pleasant Hill, Saskatoon, SK";
-      if (landmark === "kinsmen") return "Kinsmen Park, Saskatoon, SK";
-      if (landmark === "stonebridge") return "Stonebridge, Saskatoon, SK";
-      if (landmark === "warman") return "Warman, SK";
-      if (landmark === "dundurn") return "Dundurn, SK";
-      if (landmark === "prince albert") return "Prince Albert, SK";
-      if (landmark === "regina") return "Regina, SK";
-      if (landmark === "la ronge") return "La Ronge, SK";
-      if (landmark === "swift current") return "Swift Current, SK";
-      if (landmark === "north battleford") return "North Battleford, SK";
+
+  // 1. Try to find local registered neighborhoods first
+  for (const [nbhood, coords] of Object.entries(saskatoonNeighborhoods)) {
+    if (lower.includes(nbhood) && nbhood !== "cooperstown") {
+      return `${nbhood.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}, Saskatoon, SK`;
     }
   }
 
-  const prepRegex = /\b(?:on|at|near|along|around|in|of)\s+([0-9A-Z][A-Za-z0-9\s#\-]{3,40}(?:Avenue|Ave|Street|St|Road|Rd|Crescent|Cres|Drive|Dr|Highway|Hwy|Way|Crossing|Bridge|Park|Facility|Complex)?)/;
+  // 2. Try to find Saskatchewan cities
+  for (const [city] of Object.entries(saskatchewanCities)) {
+    if (lower.includes(city) && city !== "saskatchewan") {
+      return `${city.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}, SK`;
+    }
+  }
+
+  // 3. Try to parse standard road block patterns
+  const parsedBlock = parseSaskatoonStreetPattern(text);
+  if (parsedBlock) {
+    return `${parsedBlock}, Saskatoon, SK`;
+  }
+
+  // Regular expression to grab street context inside text
+  const prepRegex = /\b(?:on|at|near|along|around|in)\s+([0-9A-Z][A-Za-z0-9\s#\-]{3,40}(?:Avenue|Ave|Street|St|Road|Rd|Crescent|Cres|Drive|Dr|Highway|Hwy|Way|Crossing|Bridge|Park)?)/;
   const match = text.match(prepRegex);
-  if (match) {
-    return match[1].trim();
+  if (match && isValidSaskatoonAddressText(match[1])) {
+    return `${match[1].trim()}, Saskatoon, SK`;
   }
 
   return "Saskatoon, SK";
 }
 
-export type ResolvedLocation = {
-  latitude: number;
-  longitude: number;
-  displayLatitude: number;
-  displayLongitude: number;
-  locationPrecision: LocationPrecisionType;
-  locationConfidence: number;
-  locationText: string;
-};
-
 export async function geocodeLocation(addressText: string, sourceKey: string): Promise<ResolvedLocation> {
   let determinedPrecision: LocationPrecisionType = "unknown";
-  const lowerAddress = addressText.toLowerCase();
+  const lowerAddress = addressText.toLowerCase().trim();
 
+  // Clean the text to see if it's junk
+  const isAddressLegitimate = isValidSaskatoonAddressText(addressText);
+
+  if (!isAddressLegitimate) {
+    // Return explicit low confidence, unlocatable city center centroid record
+    return {
+      latitude: 52.1332,
+      longitude: -106.6700,
+      displayLatitude: 52.1,
+      displayLongitude: -106.7,
+      locationPrecision: "unknown",
+      locationConfidence: 0.10, // low confidence
+      locationText: "Saskatoon Centroid (Low Confidence Extract)"
+    };
+  }
+
+  // 1. Check for intersections and blocks
   if (lowerAddress.includes("&") || lowerAddress.includes(" and ") || lowerAddress.includes(" at ") || lowerAddress.includes("near") || lowerAddress.includes(" / ")) {
     determinedPrecision = "intersection";
   } else if (lowerAddress.includes("block of") || lowerAddress.includes("block")) {
     determinedPrecision = "block";
-  } else if (lowerAddress.includes("neighbourhood") || lowerAddress.includes("district") || lowerAddress.includes("ward") || lowerAddress.includes("area") || lowerAddress.includes("park") || lowerAddress.includes("crossing") || lowerAddress.includes("hill") || lowerAddress.includes("sutherland") || lowerAddress.includes("nutana") || lowerAddress.includes("pleasant h")) {
-    determinedPrecision = "neighbourhood";
-  } else if (lowerAddress.includes("saskatchewan") || lowerAddress.includes("saskatoon") || lowerAddress.includes("regina") || lowerAddress.includes("prince albert") || lowerAddress.includes("warman") || lowerAddress.includes("dundurn") || lowerAddress.includes("la ronge") || lowerAddress.includes("swift current") || lowerAddress.includes("north battleford")) {
-    determinedPrecision = "city";
+  } else {
+    // Check if neighborbood
+    for (const nbhood of Object.keys(saskatoonNeighborhoods)) {
+      if (lowerAddress.includes(nbhood)) {
+        determinedPrecision = "neighbourhood";
+        break;
+      }
+    }
   }
 
-  const exactPattern = /\b([0-9]{1,5})\s+([a-zA-Z]{3,})\s+(avenue|ave|street|st|road|rd|crescent|cres|drive|dr|way|lane|ln|court|ct|boulevard|blvd)\b/i;
+  // 2. Exact address pattern
+  const exactPattern = /\b([0-9]{1,5})\s+([a-zA-Z0-9]{3,})\s+(avenue|ave|street|st|road|rd|crescent|cres|drive|dr|way|lane|ln|court|ct|boulevard|blvd)\b/i;
   const matchExact = addressText.match(exactPattern);
   if (matchExact && determinedPrecision === "unknown") {
     determinedPrecision = "exact";
   }
 
+  // Formulate Geocoding Query
   let query = addressText;
   if (!lowerAddress.includes("saskatchewan") && !lowerAddress.includes("sk") && !lowerAddress.includes("saskatoon")) {
     query = `${addressText}, Saskatoon, SK, Canada`;
@@ -135,8 +209,8 @@ export async function geocodeLocation(addressText: string, sourceKey: string): P
   let conf = 0.50;
   let successGeocoding = false;
 
+  // Option A: Mapbox Geocoding Call
   const mapboxToken = process.env.MAPBOX_ACCESS_TOKEN;
-
   if (mapboxToken) {
     try {
       const mapboxUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${mapboxToken}&limit=1`;
@@ -148,14 +222,18 @@ export async function geocodeLocation(addressText: string, sourceKey: string): P
           lng = feature.center[0];
           lat = feature.center[1];
           conf = feature.relevance ? Math.round(feature.relevance * 100) / 100 : 0.85;
-          successGeocoding = true;
           
-          if (feature.place_type && feature.place_type.includes("address")) {
-            determinedPrecision = "exact";
-          } else if (feature.place_type && feature.place_type.includes("neighborhood")) {
-            determinedPrecision = "neighbourhood";
-          } else if (feature.place_type && feature.place_type.includes("place")) {
-            determinedPrecision = "city";
+          // Verify bounding box constraint for Saskatoon mappings
+          const fitsSaskatoon = isWithinSaskatoonBounds(lat, lng);
+          if (fitsSaskatoon || lowerAddress.includes("sk") || lowerAddress.includes("saskatchewan")) {
+            successGeocoding = true;
+            if (feature.place_type && feature.place_type.includes("address")) {
+              determinedPrecision = "exact";
+            } else if (feature.place_type && feature.place_type.includes("neighborhood")) {
+              determinedPrecision = "neighbourhood";
+            } else if (feature.place_type && feature.place_type.includes("place")) {
+              determinedPrecision = "city";
+            }
           }
         }
       }
@@ -164,6 +242,7 @@ export async function geocodeLocation(addressText: string, sourceKey: string): P
     }
   }
 
+  // Option B: OpenStreetMap Nominatim Geocoding Call
   if (!successGeocoding) {
     try {
       const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`;
@@ -177,15 +256,19 @@ export async function geocodeLocation(addressText: string, sourceKey: string): P
         const data = await response.json();
         if (Array.isArray(data) && data.length > 0) {
           const result = data[0];
-          lat = parseFloat(result.lat);
-          lng = parseFloat(result.lon);
+          const tempLat = parseFloat(result.lat);
+          const tempLng = parseFloat(result.lon);
           
-          const importance = result.importance ? parseFloat(result.importance) : 0.5;
-          conf = Math.round((0.5 + 0.5 * importance) * 100) / 100;
-          successGeocoding = true;
+          if (isWithinSaskatoonBounds(tempLat, tempLng) || lowerAddress.includes("sk") || lowerAddress.includes("saskatchewan")) {
+            lat = tempLat;
+            lng = tempLng;
+            const importance = result.importance ? parseFloat(result.importance) : 0.5;
+            conf = Math.round((0.5 + 0.5 * importance) * 100) / 100;
+            successGeocoding = true;
 
-          if (result.type === "house" || result._type === "house" || (result.class === "place" && result.type === "house")) {
-            determinedPrecision = "exact";
+            if (result.type === "house" || result._type === "house" || result.class === "place" && result.type === "house") {
+              determinedPrecision = "exact";
+            }
           }
         }
       }
@@ -194,45 +277,83 @@ export async function geocodeLocation(addressText: string, sourceKey: string): P
     }
   }
 
+  // Option C: Deterministic Local Table Fallback
   if (!successGeocoding) {
-    const localCoords = resolveSaskatoonCoordinates(addressText);
-    lat = localCoords.lat;
-    lng = localCoords.lng;
-    conf = 0.65;
-    if (determinedPrecision === "unknown") {
-      determinedPrecision = "block";
+    // 1. Check known neighborhood centroid list
+    for (const [nbhood, coords] of Object.entries(saskatoonNeighborhoods)) {
+      if (lowerAddress.includes(nbhood)) {
+        lat = coords.lat;
+        lng = coords.lng;
+        conf = 0.70;
+        determinedPrecision = "neighbourhood";
+        successGeocoding = true;
+        break;
+      }
+    }
+
+    // 2. Check other Saskatchewan cities centroid
+    if (!successGeocoding) {
+      for (const [city, coords] of Object.entries(saskatchewanCities)) {
+        if (lowerAddress.includes(city)) {
+          lat = coords.lat;
+          lng = coords.lng;
+          conf = 0.80;
+          determinedPrecision = "city";
+          successGeocoding = true;
+          break;
+        }
+      }
     }
   }
 
+  // Option D: Graceful, Safe Default (Downtown Saskatoon Centroid with LOW confidence)
+  if (!successGeocoding) {
+    lat = 52.1332;
+    lng = -106.6700;
+    conf = 0.15; // explicit low confidence indicator
+    determinedPrecision = "city";
+  }
+
+  // Localizing Precision Displays
   let finalLocationText = addressText;
 
   if (determinedPrecision === "exact") {
     if (matchExact) {
       const numStr = matchExact[1];
       const num = parseInt(numStr, 10);
-      let roundedBlock = "0-100 block of";
+      let roundedBlock = "0-100 Block of";
       if (num >= 100) {
-        roundedBlock = `${Math.floor(num / 100) * 100} block of`;
+        roundedBlock = `${Math.floor(num / 100) * 100} Block of`;
       }
       finalLocationText = addressText.replace(numStr, roundedBlock);
     } else {
       finalLocationText = addressText + " (Block-Level Approximation)";
     }
+    // Generalize precision to block level for display & storage
     determinedPrecision = "block";
   }
 
+  // Round display coordinates appropriately to preserve privacy & reflect the precision layer.
+  // For 'exact' precision, we securely round to 3 decimal places (~100m, block approximation) on the map interface.
   let displayLat = lat;
   let displayLng = lng;
 
   if (determinedPrecision === "block" || determinedPrecision === "intersection") {
     displayLat = Math.round(lat * 1000) / 1000;
     displayLng = Math.round(lng * 1000) / 1000;
+    // Overwrite exact coordinates with block-level generalized ones to guarantee privacy
+    lat = displayLat;
+    lng = displayLng;
   } else if (determinedPrecision === "neighbourhood") {
     displayLat = Math.round(lat * 100) / 100;
     displayLng = Math.round(lng * 100) / 100;
-  } else if (determinedPrecision === "city" || determinedPrecision === "unknown") {
+    lat = displayLat;
+    lng = displayLng;
+  } else {
     displayLat = Math.round(lat * 10) / 10;
     displayLng = Math.round(lng * 10) / 10;
+    lat = displayLat;
+    lng = displayLng;
   }
 
   if (determinedPrecision === "unknown") {
@@ -245,6 +366,7 @@ export async function geocodeLocation(addressText: string, sourceKey: string): P
     displayLatitude: displayLat,
     displayLongitude: displayLng,
     locationPrecision: determinedPrecision,
+    location_precision: determinedPrecision,
     locationConfidence: conf,
     locationText: finalLocationText
   };

@@ -1,6 +1,6 @@
 import React from "react";
 import { motion } from "motion/react";
-import { X, ExternalLink, Bookmark, Navigation, AlertTriangle, ShieldCheck, Calendar, MapPin, Sparkles, Camera, Eye, Radio, Compass, Shield, Activity, Clock, ChevronLeft, ChevronRight, Maximize2, Minus, Share2, Twitter, Facebook, Copy, Check, Send, Printer, FileSpreadsheet, TrendingUp, TrendingDown } from "lucide-react";
+import { X, ExternalLink, Bookmark, Navigation, AlertTriangle, ShieldCheck, Calendar, MapPin, Sparkles, Camera, Eye, Radio, Compass, Shield, Activity, Clock, ChevronLeft, ChevronRight, Maximize2, Minus, Share2, Twitter, Facebook, Copy, Check, Send, Printer, FileSpreadsheet, TrendingUp, TrendingDown, Loader2, Trash2 } from "lucide-react";
 import { ResponsiveContainer, AreaChart, Area, Tooltip as RechartsTooltip, XAxis } from "recharts";
 import { EventItem } from "../types";
 import SourceBadge from "./SourceBadge";
@@ -19,6 +19,10 @@ interface EventDrawerProps {
   onToggleBookmark: (eventId: string) => void;
   bookmarkNote: string;
   onUpdateBookmarkNote: (eventId: string, noteText: string) => void;
+  bookmarkSnapshot?: string;
+  onUpdateBookmarkSnapshot?: (eventId: string, snapshotDataUrl: string) => void;
+  onRemoveBookmarkSnapshot?: (eventId: string) => void;
+  takeSnapshotRef?: React.MutableRefObject<(() => Promise<string | null>) | null>;
   sizes?: any;
   toggleSizing?: (component: string, targetSize: "normal" | "enlarge" | "minimize") => void;
   allEvents?: EventItem[];
@@ -33,6 +37,10 @@ export default function EventDrawer({
   onToggleBookmark,
   bookmarkNote,
   onUpdateBookmarkNote,
+  bookmarkSnapshot = "",
+  onUpdateBookmarkSnapshot,
+  onRemoveBookmarkSnapshot,
+  takeSnapshotRef,
   sizes,
   toggleSizing,
   allEvents = [],
@@ -72,6 +80,7 @@ export default function EventDrawer({
   const [showShareOptions, setShowShareOptions] = React.useState<boolean>(false);
   const [copiedText, setCopiedText] = React.useState<boolean>(false);
   const [exportedCsv, setExportedCsv] = React.useState<boolean>(false);
+  const [isSnapshotLoading, setIsSnapshotLoading] = React.useState<boolean>(false);
 
   // 7-day category trend data calculation
   const trendData = React.useMemo(() => {
@@ -1140,24 +1149,32 @@ export default function EventDrawer({
                 This safety alert is a <b>fused intelligence cluster</b> combining multiple reports of the same incident within space & time constraints:
               </div>
               <div className="grid grid-cols-1 gap-1.5">
-                {selectedEvent.sourcesList.map((src, sIdx) => (
-                  <a
-                    key={sIdx}
-                    href={src.url || "#"}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center justify-between text-[11px] bg-white border border-slate-150 hover:border-emerald-300 hover:shadow-xs px-2.5 py-1.5 rounded-lg text-slate-700 font-semibold transition-all group"
-                  >
-                    <span className="flex items-center gap-1.5">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                      <span>{src.name}</span>
-                    </span>
-                    <span className="text-[9.5px] text-slate-400 group-hover:text-emerald-600 flex items-center gap-0.5 font-medium">
-                      View Original
-                      <ExternalLink size={9} />
-                    </span>
-                  </a>
-                ))}
+                {selectedEvent.sourcesList.map((src, sIdx) => {
+                  const isAnchor = selectedEvent.sourceKey === src.key;
+                  return (
+                    <a
+                      key={sIdx}
+                      href={src.url || "#"}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={`flex items-center justify-between text-[11px] bg-white border ${isAnchor ? 'border-emerald-400 shadow-sm ring-1 ring-emerald-500/10' : 'border-slate-150'} hover:border-emerald-300 hover:shadow-xs px-2.5 py-1.5 rounded-lg text-slate-700 font-semibold transition-all group`}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <span className={`h-1.5 w-1.5 rounded-full ${isAnchor ? 'bg-emerald-600 animate-pulse' : 'bg-slate-400'}`} />
+                        <span>{src.name}</span>
+                        {isAnchor && (
+                          <span className="text-[8px] bg-emerald-600 text-white font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ml-1 scale-90 origin-left">
+                            Metric Anchor
+                          </span>
+                        )}
+                      </span>
+                      <span className="text-[9.5px] text-slate-400 group-hover:text-emerald-600 flex items-center gap-0.5 font-medium">
+                        {isAnchor ? "Primary Source" : "View Original"}
+                        <ExternalLink size={9} />
+                      </span>
+                    </a>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -1416,6 +1433,118 @@ export default function EventDrawer({
                 <span className={`h-1.5 w-1.5 rounded-full ${saveStatus === "saving" ? "bg-indigo-500 animate-ping" : "bg-emerald-500"}`} />
                 {saveStatus === "saving" ? "SAVING..." : "● AUTO-SAVED"}
               </span>
+            </div>
+
+            {/* Map snapshot subsection */}
+            <div className="border-t border-amber-200/40 pt-3.5 space-y-2">
+              <div className="text-[10px] uppercase font-bold tracking-wider font-mono text-amber-750 flex items-center gap-1.5 justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Camera size={12} className="text-amber-650" />
+                  <span>Map Viewport Snapshot</span>
+                </span>
+                {bookmarkSnapshot && onRemoveBookmarkSnapshot && (
+                  <button
+                    type="button"
+                    onClick={() => onRemoveBookmarkSnapshot(selectedEvent.id)}
+                    className="text-[9.5px] text-red-600 hover:text-red-850 font-bold flex items-center gap-0.5 cursor-pointer hover:bg-red-50 px-1.5 py-0.5 rounded transition-all border border-transparent hover:border-red-100"
+                  >
+                    <Trash2 size={10} />
+                    <span>Delete Snapshot</span>
+                  </button>
+                )}
+              </div>
+
+              {bookmarkSnapshot ? (
+                <div className="space-y-2 animate-in fade-in duration-200">
+                  <div className="relative group rounded-lg overflow-hidden border border-amber-200/60 bg-white p-1 shadow-sm max-w-[280px]">
+                    <img
+                      src={bookmarkSnapshot}
+                      alt="Personal safety map snapshot"
+                      className="rounded w-full max-h-[140px] object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const link = document.createElement("a");
+                          link.href = bookmarkSnapshot;
+                          link.download = `saskatoon_safety_snapshot_${selectedEvent.id}.png`;
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                        }}
+                        className="bg-white/95 text-slate-800 font-bold p-1 px-2 text-[10px] rounded hover:bg-white shadow transition-all flex items-center gap-1 cursor-pointer"
+                      >
+                        <Camera size={10} /> Expand / Save
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={isSnapshotLoading}
+                      onClick={async () => {
+                        if (!takeSnapshotRef?.current) return;
+                        setIsSnapshotLoading(true);
+                        const raw = await takeSnapshotRef.current();
+                        if (raw && onUpdateBookmarkSnapshot) {
+                          onUpdateBookmarkSnapshot(selectedEvent.id, raw);
+                        }
+                        setIsSnapshotLoading(false);
+                      }}
+                      className="text-[9.5px] font-bold text-amber-800 hover:text-amber-950 select-none bg-amber-100/40 hover:bg-amber-100/70 border border-amber-200 rounded px-2.5 py-1.5 flex items-center gap-1 transition-all cursor-pointer"
+                    >
+                      {isSnapshotLoading ? (
+                        <>
+                          <Loader2 size={10} className="animate-spin" />
+                          <span>Generating image...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Camera size={10} />
+                          <span>Update Snapshot</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed border-amber-200 bg-amber-100/5 p-3 text-center space-y-1.5">
+                  <p className="text-[10px] text-slate-500 font-sans tracking-tight">
+                    No map snapshot attached. Capture exactly what you see right now (pinned details, travel routes, heatmaps, or specific threat zones).
+                  </p>
+                  <button
+                    type="button"
+                    disabled={isSnapshotLoading}
+                    onClick={async () => {
+                      if (!takeSnapshotRef?.current) {
+                        alert("The safety map is currently rendering. Please try again in 1-2 seconds!");
+                        return;
+                      }
+                      setIsSnapshotLoading(true);
+                      const raw = await takeSnapshotRef.current();
+                      if (raw && onUpdateBookmarkSnapshot) {
+                        onUpdateBookmarkSnapshot(selectedEvent.id, raw);
+                      }
+                      setIsSnapshotLoading(false);
+                    }}
+                    className="mx-auto text-[10.5px] font-extrabold text-amber-900 bg-amber-100 hover:bg-amber-205 hover:text-amber-950 border border-amber-200 shadow-sm rounded-lg py-1.5 px-3 flex items-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    {isSnapshotLoading ? (
+                      <>
+                        <Loader2 size={11} className="spin text-amber-800 animate-spin" />
+                        <span>Rendering current map...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Camera size={11} className="text-amber-700" />
+                        <span>📸 Capture & Save Map State</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}

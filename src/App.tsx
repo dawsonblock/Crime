@@ -30,6 +30,7 @@ export default function App() {
   const [sources, setSources] = useState<EventSource[]>([]);
   const [bookmarks, setBookmarks] = useState<string[]>([]);
   const [bookmarkNotes, setBookmarkNotes] = useState<Record<string, string>>({});
+  const [bookmarkSnapshots, setBookmarkSnapshots] = useState<Record<string, string>>({});
 
   // Firebase Auth & Cloud Sync States
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -158,7 +159,11 @@ export default function App() {
 
       fetch("/api/alert-zones/sync", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "x-user-role": currentUser ? "analyst" : "viewer",
+          "x-user-id": currentUser ? currentUser.uid : guestUid
+        },
         body: JSON.stringify(pinsToSync),
         signal: controller.signal
       })
@@ -273,6 +278,9 @@ export default function App() {
 
   // Refs for tracking width calculations
   const sidebarContainerRef = useRef<HTMLDivElement>(null);
+  
+  // Ref to trigger map snapshots from parent/other sibling panels
+  const takeSnapshotRef = useRef<(() => Promise<string | null>) | null>(null);
 
   // Dragging interaction states
   const [isDraggingSidebar, setIsDraggingSidebar] = useState<boolean>(false);
@@ -519,6 +527,8 @@ export default function App() {
   // Filters State
   const [filters, setFilters] = useState<FilterState>({
     timeRangeHours: "all",
+    startDate: "",
+    endDate: "",
     severities: ["critical", "high", "medium", "low"],
     eventTypes: [], // empty means all categories are shown
     sourceKey: "all",
@@ -703,13 +713,18 @@ export default function App() {
           console.log(`[Firebase DB] Successfully loaded ${data.length} cloud bookmarks.`);
           const ids = data.map(b => b.eventId);
           const notes: Record<string, string> = {};
+          const snapshots: Record<string, string> = {};
           data.forEach(b => {
             if (b.note) {
               notes[b.eventId] = b.note;
             }
+            if (b.mapSnapshot) {
+              snapshots[b.eventId] = b.mapSnapshot;
+            }
           });
           setBookmarks(ids);
           setBookmarkNotes(notes);
+          setBookmarkSnapshots(snapshots);
         }
         setBookmarksReady(true);
       })
@@ -723,6 +738,10 @@ export default function App() {
           const storedNotes = localStorage.getItem("saskatoon_bookmark_notes");
           if (storedNotes) {
             setBookmarkNotes(JSON.parse(storedNotes));
+          }
+          const storedSnapshots = localStorage.getItem("saskatoon_bookmark_snapshots");
+          if (storedSnapshots) {
+            setBookmarkSnapshots(JSON.parse(storedSnapshots));
           }
         } catch (e) {
           console.error("Local storage bookmarks retrieval rejected:", e);
@@ -742,6 +761,7 @@ export default function App() {
     try {
       localStorage.setItem("saskatoon_bookmarks", JSON.stringify(bookmarks));
       localStorage.setItem("saskatoon_bookmark_notes", JSON.stringify(bookmarkNotes));
+      localStorage.setItem("saskatoon_bookmark_snapshots", JSON.stringify(bookmarkSnapshots));
     } catch (e) {
       console.error("Failed to backup bookmarks to localStorage:", e);
     }
@@ -751,6 +771,7 @@ export default function App() {
       userId: uid,
       eventId: id,
       note: bookmarkNotes[id] || "",
+      mapSnapshot: bookmarkSnapshots[id] || "",
       createdAt: new Date().toISOString()
     }));
 
@@ -758,7 +779,11 @@ export default function App() {
     const timeout = setTimeout(() => {
       fetch("/api/bookmarks/sync", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "x-user-role": currentUser ? "analyst" : "viewer",
+          "x-user-id": uid
+        },
         body: JSON.stringify({ userId: uid, list: payload }),
         signal: controller.signal
       })
@@ -775,15 +800,17 @@ export default function App() {
       controller.abort();
       clearTimeout(timeout);
     };
-  }, [bookmarks, bookmarkNotes, currentUser, guestUid, bookmarksReady]);
+  }, [bookmarks, bookmarkNotes, bookmarkSnapshots, currentUser, guestUid, bookmarksReady]);
 
   // 3c. Bookmarking toggling handlers
   const handleToggleBookmark = (eventId: string) => {
     let updated: string[];
     const updatedNotes = { ...bookmarkNotes };
+    const updatedSnapshots = { ...bookmarkSnapshots };
     if (bookmarks.includes(eventId)) {
       updated = bookmarks.filter((id) => id !== eventId);
       delete updatedNotes[eventId];
+      delete updatedSnapshots[eventId];
       setSuccessToast("Removed from bookmarked safety watchlist.");
     } else {
       updated = [...bookmarks, eventId];
@@ -792,11 +819,23 @@ export default function App() {
 
     setBookmarks(updated);
     setBookmarkNotes(updatedNotes);
+    setBookmarkSnapshots(updatedSnapshots);
   };
 
   const handleUpdateBookmarkNote = (eventId: string, noteText: string) => {
     const updatedNotes = { ...bookmarkNotes, [eventId]: noteText };
     setBookmarkNotes(updatedNotes);
+  };
+
+  const handleUpdateBookmarkSnapshot = (eventId: string, snapshotDataUrl: string) => {
+    const updatedSnapshots = { ...bookmarkSnapshots, [eventId]: snapshotDataUrl };
+    setBookmarkSnapshots(updatedSnapshots);
+  };
+
+  const handleRemoveBookmarkSnapshot = (eventId: string) => {
+    const updatedSnapshots = { ...bookmarkSnapshots };
+    delete updatedSnapshots[eventId];
+    setBookmarkSnapshots(updatedSnapshots);
   };
 
   // --- REAL-TIME PROXIMITY ALERT SCANNER ENGINE STATES ---
@@ -986,7 +1025,13 @@ export default function App() {
     setIsIngesting(true);
     setErrorMessage(null);
     try {
-      const res = await fetch("/api/ingest/run", { method: "POST" });
+      const res = await fetch("/api/ingest/run", { 
+        method: "POST",
+        headers: {
+          "x-user-role": currentUser ? "analyst" : "viewer",
+          "x-user-id": currentUser ? currentUser.uid : "guest-uid"
+        }
+      });
       if (!res.ok) {
         throw new Error("Feeds crawl triggered a network rejection response.");
       }
@@ -1114,7 +1159,11 @@ export default function App() {
     try {
       const res = await fetch("/api/events/report-manual", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "x-user-role": currentUser ? "analyst" : "viewer",
+          "x-user-id": currentUser ? currentUser.uid : "guest-uid"
+        },
         body: JSON.stringify({ rawText, originalUrl, mode }),
       });
 
@@ -1222,7 +1271,7 @@ export default function App() {
       }
 
       // Timeframe Hours bounds check
-      if (filters.timeRangeHours !== "all") {
+      if (filters.timeRangeHours !== "all" && filters.timeRangeHours !== "custom") {
         const scopeHours = parseInt(filters.timeRangeHours, 10);
         if (!isNaN(scopeHours)) {
           const cutOffMs = Date.now() - (scopeHours * 3600 * 1000);
@@ -1230,6 +1279,22 @@ export default function App() {
           if (publishedMs < cutOffMs) {
             return false;
           }
+        }
+      }
+
+      // Calendar Custom Date Range
+      if (filters.startDate) {
+        const startMs = new Date(`${filters.startDate}T00:00:00`).getTime();
+        const publishedMs = new Date(evt.publishedAt).getTime();
+        if (publishedMs < startMs) {
+          return false;
+        }
+      }
+      if (filters.endDate) {
+        const endMs = new Date(`${filters.endDate}T23:59:59`).getTime();
+        const publishedMs = new Date(evt.publishedAt).getTime();
+        if (publishedMs > endMs) {
+          return false;
         }
       }
 
@@ -2022,6 +2087,10 @@ export default function App() {
                       events={events}
                       bookmarks={bookmarks}
                       bookmarkNotes={bookmarkNotes}
+                      bookmarkSnapshots={bookmarkSnapshots}
+                      onUpdateBookmarkSnapshot={handleUpdateBookmarkSnapshot}
+                      onRemoveBookmarkSnapshot={handleRemoveBookmarkSnapshot}
+                      takeSnapshotRef={takeSnapshotRef}
                       onSelectEvent={(evt) => setSelectedEvent(evt)}
                       onToggleBookmark={handleToggleBookmark}
                       onUpdateBookmarkNote={handleUpdateBookmarkNote}
@@ -2645,6 +2714,7 @@ export default function App() {
                 setMapZoom(zoom);
                 setMapCenterCoords({ lat, lng });
               }}
+              takeSnapshotRef={takeSnapshotRef}
             />
 
             {/* Absolute-positioned semi-transparent real-time info panel inside #map-container */}
@@ -2803,6 +2873,10 @@ export default function App() {
                   onToggleBookmark={handleToggleBookmark}
                   bookmarkNote={bookmarkNotes[selectedEvent.id] || ""}
                   onUpdateBookmarkNote={handleUpdateBookmarkNote}
+                  bookmarkSnapshot={bookmarkSnapshots[selectedEvent.id] || ""}
+                  onUpdateBookmarkSnapshot={handleUpdateBookmarkSnapshot}
+                  onRemoveBookmarkSnapshot={handleRemoveBookmarkSnapshot}
+                  takeSnapshotRef={takeSnapshotRef}
                   sizes={sizes}
                   toggleSizing={toggleSizing}
                   allEvents={events}

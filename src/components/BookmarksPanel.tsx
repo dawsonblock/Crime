@@ -2,7 +2,7 @@ import React, { useMemo, useState } from "react";
 import { 
   Bookmark, Trash2, Search, Calendar, MapPin, 
   Sparkles, AlertCircle, FileText, ChevronRight, Edit3, 
-  Map, BookmarkMinus, CheckCircle2, FileEdit
+  Map, BookmarkMinus, CheckCircle2, FileEdit, Camera, Loader2
 } from "lucide-react";
 import { EventItem } from "../types";
 import SourceBadge from "./SourceBadge";
@@ -11,6 +11,10 @@ interface BookmarksPanelProps {
   events: EventItem[];
   bookmarks: string[];
   bookmarkNotes: Record<string, string>;
+  bookmarkSnapshots?: Record<string, string>;
+  onUpdateBookmarkSnapshot?: (eventId: string, snapshotDataUrl: string) => void;
+  onRemoveBookmarkSnapshot?: (eventId: string) => void;
+  takeSnapshotRef?: React.MutableRefObject<(() => Promise<string | null>) | null>;
   onSelectEvent: (event: EventItem) => void;
   onToggleBookmark: (eventId: string) => void;
   onUpdateBookmarkNote: (eventId: string, noteText: string) => void;
@@ -20,6 +24,10 @@ export default function BookmarksPanel({
   events,
   bookmarks,
   bookmarkNotes,
+  bookmarkSnapshots = {},
+  onUpdateBookmarkSnapshot,
+  onRemoveBookmarkSnapshot,
+  takeSnapshotRef,
   onSelectEvent,
   onToggleBookmark,
   onUpdateBookmarkNote,
@@ -230,6 +238,25 @@ export default function BookmarksPanel({
                         <p className="text-[10.5px] text-slate-400 font-semibold italic select-none">
                           No safety notes entered yet. Keep route comments or reminders here...
                         </p>
+                      )}
+
+                      {/* Personal Snapshot Display in Bookmarks Tab */}
+                      {bookmarkSnapshots[evt.id] && (
+                        <div className="pt-2.5 animate-in fade-in duration-250">
+                          <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-amber-700 flex items-center gap-1 select-none mb-1">
+                            <Camera size={10} /> Saved Map View
+                          </span>
+                          <div className="relative group rounded-md overflow-hidden border border-amber-200/50 bg-white p-0.5 shadow-xs max-w-full">
+                            <img
+                              src={bookmarkSnapshots[evt.id]}
+                              alt="Map layout capture"
+                              className="rounded w-full max-h-[100px] object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                              onClick={() => onSelectEvent(evt)}
+                              title="Click to locate on map"
+                              referrerPolicy="no-referrer"
+                            />
+                          </div>
+                        </div>
                       )}
                     </div>
                   )}

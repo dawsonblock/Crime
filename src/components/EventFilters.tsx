@@ -20,7 +20,9 @@ function getDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number) {
 }
 
 export interface FilterState {
-  timeRangeHours: string; // "24", "168" (7d), "720" (30d), "all"
+  timeRangeHours: string; // "24", "168" (7d), "720" (30d), "all", "custom"
+  startDate?: string;
+  endDate?: string;
   severities: SeverityType[];
   eventTypes: string[]; // multi-select categories
   sourceKey: string; // "all" or specific
@@ -179,7 +181,7 @@ export default function EventFilters({
       }
 
       // Timeframe
-      if (filters.timeRangeHours !== "all") {
+      if (filters.timeRangeHours !== "all" && filters.timeRangeHours !== "custom") {
         const scopeHours = parseInt(filters.timeRangeHours, 10);
         if (!isNaN(scopeHours)) {
           const cutOffMs = Date.now() - (scopeHours * 3600 * 1000);
@@ -187,6 +189,22 @@ export default function EventFilters({
           if (publishedMs < cutOffMs) {
             return false;
           }
+        }
+      }
+
+      // Calendar Custom Date Range
+      if (filters.startDate) {
+        const startMs = new Date(`${filters.startDate}T00:00:00`).getTime();
+        const publishedMs = new Date(evt.publishedAt).getTime();
+        if (publishedMs < startMs) {
+          return false;
+        }
+      }
+      if (filters.endDate) {
+        const endMs = new Date(`${filters.endDate}T23:59:59`).getTime();
+        const publishedMs = new Date(evt.publishedAt).getTime();
+        if (publishedMs > endMs) {
+          return false;
         }
       }
 
@@ -259,7 +277,7 @@ export default function EventFilters({
   };
 
   const handleTimeChange = (hours: string) => {
-    onChange({ ...filters, timeRangeHours: hours });
+    onChange({ ...filters, timeRangeHours: hours, startDate: "", endDate: "" });
   };
 
   const handleSeverityToggle = (sev: SeverityType) => {
@@ -543,11 +561,21 @@ export default function EventFilters({
     drawHeaderAndStats();
 
     eventsToExport.forEach((evt, idx) => {
+      const originalSeverity = evt.severity;
+      const incidentSeverityValue = evt.incident_severity || originalSeverity;
+      const riskState = evt.active_risk_state || "unknown";
+      const riskScore = evt.current_risk_score !== undefined ? evt.current_risk_score : "N/A";
+      const scopeVal = evt.geo_scope || "unknown";
+      const confScoreVal = evt.confidence_score !== undefined ? evt.confidence_score : (evt.confidence || 0.5);
+
+      const isCentroidFallback = confScoreVal <= 0.32 || evt.locationText?.toLowerCase().includes("centroid") || evt.locationText?.toLowerCase().includes("low confidence");
+
       const descriptionLines = doc.splitTextToSize(evt.summary || "No secondary statement detailed for this report series.", 168);
       const descriptionHeight = descriptionLines.length * 4.2;
 
-      // Calculate total physical height of the card on paper (title + meta + details + margin)
-      const contentHeight = 5 + 4 + 4 + descriptionHeight + 7;
+      // Adjust height dimensions dynamically to ensure perfect vertical flow on pdf layout
+      const warningHeight = isCentroidFallback ? 4.5 : 0;
+      const contentHeight = 5 + 4.5 + 4.5 + 4.5 + warningHeight + descriptionHeight + 7;
 
       // If Y coordinate exceeds boundaries, paint running footer and start page 2
       if (y + contentHeight > 270) {
@@ -566,52 +594,60 @@ export default function EventFilters({
         y = 26; // reset cursor offset
       }
 
-      // Draw item
-      // Title card box outline accents
+      // Draw item card panel
       const severityColor = getSeverityRGB(evt.severity);
       doc.setDrawColor(226, 232, 240); // Slate-200 border
       doc.setLineWidth(0.15);
       doc.setFillColor(252, 253, 254);
-      
-      // Draw background panel box for this incident
       doc.rect(15, y, 180, contentHeight - 3, "FD");
 
-      // Left thick severity colored bar indicator
+      // Left-bound severity accent color bar
       doc.setFillColor(severityColor[0], severityColor[1], severityColor[2]);
       doc.rect(15, y, 2.5, contentHeight - 3, "F");
 
-      // Draw Event Title
+      // Title line
       doc.setFont("helvetica", "bold");
       doc.setFontSize(9);
       doc.setTextColor(30, 41, 59); // deep slate-800
       doc.text(evt.title, 20, y + 4.5, { maxWidth: 170 });
 
-      // Draw META row
+      // Row 1: Severity, Risk State, Geographic Scope
       doc.setFont("helvetica", "bold");
       doc.setFontSize(7);
       doc.setTextColor(severityColor[0], severityColor[1], severityColor[2]);
-      doc.text(evt.severity.toUpperCase(), 20, y + 9);
-
+      doc.text(`SEVERITY: ${incidentSeverityValue.toUpperCase()}`, 20, y + 9);
+      
       doc.setFont("helvetica", "normal");
       doc.setTextColor(100, 116, 139); // slate-500
+      doc.text(` | STATE: ${riskState.toUpperCase()} | SCOPE: ${scopeVal.toUpperCase()}`, 49, y + 9);
+
+      // Row 2: Operational risk score, confidence rating, source, and published time
       const formattedTime = new Date(evt.publishedAt).toLocaleString("en-US", {
         month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit"
       });
-      doc.text(` | SOURCE: ${evt.sourceName.toUpperCase()} | TIME: ${formattedTime.toUpperCase()}`, 33, y + 9);
+      doc.text(`RISK SCORE: ${riskScore}/100 | CONFIDENCE: ${Math.round(confScoreVal * 100)}% | SOURCE: ${evt.sourceName.toUpperCase()} (${formattedTime.toUpperCase()})`, 20, y + 13);
 
-      // Draw Location line
+      // Row 3: Physical Location precision details
       doc.setFont("helvetica", "italic");
-      doc.setTextColor(115, 115, 115); // gray-500
-      const locText = `Location: ${evt.locationText || "Unspecified Area"} (${evt.locationPrecision} precision)`;
-      doc.text(locText, 20, y + 13, { maxWidth: 170 });
+      doc.setTextColor(115, 115, 115); // grey-500
+      const locText = `Location: ${evt.locationText || "Unspecified Area"} (${evt.locationPrecision || "unknown"} precision)`;
+      doc.text(locText, 20, y + 17, { maxWidth: 170 });
 
-      // Draw wrapped incident details
+      let descriptionOffset = y + 21;
+
+      // Row 4: (Conditional) High-visibility warnings about centroid centroid layout falls
+      if (isCentroidFallback) {
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(220, 38, 38); // Warning Red
+        doc.text("⚠️ WARNING: GEOGRAPHIC CENTROID FALLBACK. NO SPECIFIC LOCAL ADDRESS WAS PROVIDED.", 20, y + 21.5);
+        descriptionOffset += warningHeight;
+      }
+
+      // Chronological summaries
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8.2);
       doc.setTextColor(51, 65, 85); // Slate-700
-      
-      // Draw actual multi-line text dynamically
-      doc.text(descriptionLines, 20, y + 17.5);
+      doc.text(descriptionLines, 20, descriptionOffset);
 
       y += contentHeight;
     });
@@ -1039,6 +1075,61 @@ export default function EventFilters({
                 {t.label}
               </button>
             ))}
+          </div>
+        </div>
+
+        {/* Custom Date Range Picker */}
+        <div className="space-y-1.5 pt-1.5 border-t border-slate-100">
+          <div className="flex items-center justify-between">
+            <span className="text-[9px] uppercase font-bold font-mono text-slate-400 flex items-center gap-1">
+              Custom Date Range
+            </span>
+            {(filters.startDate || filters.endDate) && (
+              <button
+                type="button"
+                onClick={() => {
+                  onChange({ ...filters, startDate: "", endDate: "", timeRangeHours: "all" });
+                }}
+                className="text-[9px] font-bold text-red-500 hover:text-red-700 uppercase font-mono cursor-pointer transition-colors"
+                id="clear-date-filter-btn"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            <div className="space-y-0.5">
+              <span className="text-[8px] text-slate-400 block font-mono uppercase font-semibold">Start</span>
+              <input
+                type="date"
+                value={filters.startDate || ""}
+                onChange={(e) => {
+                  onChange({
+                    ...filters,
+                    startDate: e.target.value,
+                    timeRangeHours: "custom",
+                  });
+                }}
+                className="w-full text-[11px] px-1.5 py-1 rounded border border-slate-200 text-slate-750 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-sans cursor-pointer h-7"
+                id="start-date-picker"
+              />
+            </div>
+            <div className="space-y-0.5">
+              <span className="text-[8px] text-slate-400 block font-mono uppercase font-semibold">End</span>
+              <input
+                type="date"
+                value={filters.endDate || ""}
+                onChange={(e) => {
+                  onChange({
+                    ...filters,
+                    endDate: e.target.value,
+                    timeRangeHours: "custom",
+                  });
+                }}
+                className="w-full text-[11px] px-1.5 py-1 rounded border border-slate-200 text-slate-750 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-sans cursor-pointer h-7"
+                id="end-date-picker"
+              />
+            </div>
           </div>
         </div>
 

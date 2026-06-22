@@ -1,6 +1,7 @@
 import React, { useState, useRef } from "react";
 import { Upload, X, Sparkles, AlertCircle, FileText, CheckCircle2, ChevronRight, Check } from "lucide-react";
 import { EventItem, SeverityType, SourceType } from "../types";
+import { auth } from "../lib/firebase";
 
 interface UploadNewsPanelProps {
   onSuccess: (addedCount: number, addedEvents: EventItem[]) => void;
@@ -106,9 +107,14 @@ export default function UploadNewsPanel({ onSuccess, configSources }: UploadNews
     setSuccessResult(null);
 
     try {
+      const currentUser = auth.currentUser;
       const response = await fetch("/api/events/upload-news", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "x-user-role": currentUser ? "analyst" : "viewer",
+          "x-user-id": currentUser ? currentUser.uid : "guest-uid"
+        },
         body: JSON.stringify({
           text: rawText,
           mode: parserMode,
